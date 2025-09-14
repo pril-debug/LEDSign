@@ -60,8 +60,25 @@ fi
 SETTINGS_JSON="${CONF_DIR}/settings.json"
 if [ ! -f "$SETTINGS_JSON" ]; then
   echo "==> Writing default settings.json"
-  # password_hash here is for the password 'admin'
-  cat > "$SETTINGS_JSON" <<'JSON'
+
+  # Choose the default admin password (env override supported)
+  DEFAULT_PASS="${DEFAULT_ADMIN_PASSWORD:-admin}"
+
+  # Generate a fresh password hash using Werkzeug in the project venv
+  VENV_BIN="/home/${PI_USER}/sign-controller/venv/bin"
+  if [ ! -x "${VENV_BIN}/python" ]; then
+    echo "ERROR: venv python not found at ${VENV_BIN}/python" >&2
+    exit 1
+  fi
+  ADMIN_HASH="$("${VENV_BIN}/python" - <<PY
+from werkzeug.security import generate_password_hash
+print(generate_password_hash("${DEFAULT_PASS}"))
+PY
+)"
+
+  # Write the JSON with real user paths and the generated hash
+  install -d -m 0755 "${CONF_DIR}"
+  cat > "${SETTINGS_JSON}" <<JSON
 {
   "led_rows": 64,
   "led_cols": 64,
@@ -71,17 +88,18 @@ if [ ! -f "$SETTINGS_JSON" ]; then
   "led_brightness": 80,
   "led_gpio_slowdown": 2,
   "led_hardware_mapping": "regular",
-  "logo_path": "/home/PI_USER_REPL/sign-controller/config/Logo-White.png",
-  "customer_logo_path": "/home/PI_USER_REPL/sign-controller/config/customer_logo.png",
+  "logo_path": "/home/${PI_USER}/sign-controller/config/Logo-White.png",
+  "customer_logo_path": "/home/${PI_USER}/sign-controller/config/customer_logo.png",
   "web_port": 8000,
   "auth": {
     "username": "admin",
-    "password_hash": "pbkdf2:sha256:600000$DkZ0t4KzWwW2s4Lz$3bc0d6d6a2f8db6f9b8d7f3fa5a7c5d3f9f2e1e6e0d8c2a30f5df0a39ad9fd70"
+    "password_hash": "${ADMIN_HASH}"
   }
 }
 JSON
-  # replace placeholder PI_USER_REPL in JSON
-  sed -i "s|PI_USER_REPL|${PI_USER}|g" "$SETTINGS_JSON"
+
+  chown "${PI_USER}:${PI_USER}" "${SETTINGS_JSON}"
+  chmod 0644 "${SETTINGS_JSON}"
 fi
 
 # placeholder white logo if missing
