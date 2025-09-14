@@ -35,6 +35,7 @@ PKGS=(
   libtiff5-dev libatlas-base-dev cython3
   nginx imagemagick
   openresolv
+  iw wpasupplicant rfkill
 )
 if [ "$USE_NM" = "true" ]; then
   PKGS+=(network-manager)
@@ -182,6 +183,121 @@ if systemctl is-active --quiet NetworkManager; then
   flush_addr "$IFACE"; nmcli c down "$PROFILE" >/dev/null 2>&1 || true; nmcli c up "$PROFILE"; log "applied via NetworkManager"; exit 0
 fi
 
+
+# -------- wifi scripts (scan + apply) --------
+WIFI_SCAN="${SCRIPTS_DIR}/wifi_scan.sh"
+WIFI_APPLY="${SCRIPTS_DIR}/apply_wifi.sh"
+echo "==> Installing Wi-Fi scripts"
+
+sudo tee "$WIFI_SCAN" >/dev/null <<"BASH"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFACE="${1:-wlan0}"
+LANG=C
+
+# Ensure interface exists
+ip link show "$IFACE" >/dev/null 2>&1 || { echo "[]" ; exit 0; }
+
+# Bring it up if needed (safe/no-op if already up)
+ip link set "$IFACE" up || true
+sleep 0.4
+
+# Use iw to scan; if it fails, return empty list (so Flask can display gracefully)
+SCAN_OUT="$(iw dev "$IFACE" scan 2>/dev/null || true)"
+
+# Parse iw output into JSON with jq
+echo "$SCAN_OUT" | awk '
+/^BSS / {mac=$2}
+/freq:/ {freq=$2}
+/signal:/ {sig=$2}
+/SSID:/ { s=$0; sub(/^[[:space:]]*SSID:[[:space:]]*/,"",s); ssid=s }
+/RSN:/ {secure=1}
+/WPA:/ {secure=1}
+/^$/ {
+  if (ssid != "") {
+    printf "SSID:%s|SIG:%s|FREQ:%s|SEC:%d\n", ssid, sig, freq, secure ? 1 : 0
+  }
+  ssid=""; sig=""; freq=""; secure=0
+}
+END{
+  if (ssid != "") {
+    printf "SSID:%s|SIG:%s|FREQ:%s|SEC:%d\n", ssid, sig, freq, secure ? 1 : 0
+  }
+}' | awk 'NF' | jq -R -s '
+  split("\n")[:-1]
+  | map(
+      capture("SSID:(?<ssid>.*)\\|SIG:(?<sig>[^|]*)\\|FREQ:(?<freq>[^|]*)\\|SEC:(?<sec>\\d)")
+      | .ssid = (.ssid | gsub("\\s+$"; "")) 
+      | .signal = (.sig | tonumber? // -100)
+      | .freq   = (.freq | tonumber? // 0)
+      | .secure = (.sec == "1")
+      | .chan   = (
+          if .freq >= 2412 and .freq <= 2484 then ((.freq - 2407)/5 | floor)
+          elif .freq >= 5160 and .freq <= 5885 then ((.freq - 5000)/5 | floor)
+          else 0 end
+        )
+      | {ssid, signal, freq, chan, secure}
+    )'
+BASH
+sudo chmod +x "$WIFI_SCAN"
+
+sudo tee "$WIFI_APPLY" >/dev/null <<"BASH"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Read JSON from stdin: {"ssid":"...","psk":"..."}
+PAYLOAD="$(cat)"
+SSID="$(printf '%s' "$PAYLOAD" | jq -r '.ssid // ""')"
+PSK="$(printf  '%s' "$PAYLOAD" | jq -r '.psk  // ""')"
+
+IFACE="${1:-wlan0}"
+CONF="/etc/wpa_supplicant/wpa_supplicant.conf"
+
+[ -n "$SSID" ] || { echo "Missing SSID" >&2; exit 1; }
+# PSK may be empty for open networks; handle both
+
+# Make sure radio is unblocked and interface is up
+rfkill unblock wifi || true
+ip link set "$IFACE" up || true
+
+# Write a minimal, sane wpa_supplicant.conf
+sudo install -d -m 0755 /etc/wpa_supplicant
+sudo bash -c "cat > '$CONF'" <<EOF
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=US
+
+network={
+    ssid="$SSID"
+$( if [ -n "$PSK" ]; then
+     cat <<EOPS
+    psk="$PSK"
+    key_mgmt=WPA-PSK
+EOPS
+   else
+     echo '    key_mgmt=NONE'
+   fi )
+}
+EOF
+sudo chmod 600 "$CONF"
+
+# Stop NM if present; use dhcpcd path
+systemctl stop NetworkManager 2>/dev/null || true
+
+# Restart wpa_supplicant (if unit exists) and dhcpcd to pick up config
+if systemctl list-unit-files | grep -q '^wpa_supplicant.service'; then
+  sudo systemctl restart wpa_supplicant || true
+fi
+sudo systemctl restart dhcpcd || true
+
+# Give DHCP a moment, then print current IP (best-effort)
+sleep 2
+ip -4 -o addr show dev "$IFACE" | awk '{print $4}' || true
+BASH
+sudo chmod +x "$WIFI_APPLY"
+
+
+
 # ===== dhcpcd fallback =====
 CONF="/etc/dhcpcd.conf"
 TAG_BEGIN="# LEDSign ${IFACE} BEGIN"; TAG_END="# LEDSign ${IFACE} END"
@@ -218,7 +334,7 @@ sudo touch /var/log/ledsign-apply.log && sudo chown root:"${PI_USER}" /var/log/l
 # -------- sudoers --------
 echo "==> Sudoers rule"
 SUDOERS_FILE="/etc/sudoers.d/sign-controller-web"
-SUDO_LINE="${PI_USER} ALL=(root) NOPASSWD: ${APPLY_SH}, /usr/bin/nmcli, /usr/sbin/ip"
+SUDO_LINE="${PI_USER} ALL=(root) NOPASSWD: ${APPLY_SH}, ${WIFI_SCAN}, ${WIFI_APPLY}, /usr/bin/nmcli, /usr/sbin/iw, /usr/sbin/rfkill, /usr/sbin/ip, /bin/systemctl"
 if [ ! -f "$SUDOERS_FILE" ] || ! sudo grep -qxF "$SUDO_LINE" "$SUDOERS_FILE"; then
   echo "$SUDO_LINE" | sudo tee "$SUDOERS_FILE" >/dev/null
   sudo chmod 440 "$SUDOERS_FILE"
