@@ -21,6 +21,10 @@ SCRIPTS_DIR="${ROOT_DIR}/scripts"
 PY="${ROOT_DIR}/venv/bin/python"
 PIP="${ROOT_DIR}/venv/bin/pip"
 
+# Wi-Fi helper scripts (define early so sudoers can reference them)
+WIFI_SCAN="${SCRIPTS_DIR}/wifi_scan.sh"
+WIFI_APPLY="${SCRIPTS_DIR}/apply_wifi.sh"
+
 # -------- time & apt --------
 echo "==> Syncing time / base system"
 sudo timedatectl set-ntp true || true
@@ -140,55 +144,11 @@ if [ ! -f "${CONF_DIR}/Logo-White.png" ]; then
   convert -size 256x128 xc:black -gravity center -pointsize 22 -fill white \
     -annotate 0 "LED Sign" "${CONF_DIR}/Logo-White.png"
 fi
-mkdir -p "${WEB_DIR}/static"
-cp -f "${CONF_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png"
+mkdir -p "${WEB_DIR}/static}"
+cp -f "${CONF_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png" || true
 
-# -------- network apply script (fixed DNS + logging) --------
-APPLY_SH="${SCRIPTS_DIR}/apply_network.sh"
-echo "==> Installing network apply script"
-sudo tee "$APPLY_SH" >/dev/null <<"BASH"
-#!/usr/bin/env bash
-set -Eeuo pipefail
-LOG=/var/log/ledsign-apply.log
-log(){ printf '%(%Y-%m-%d %H:%M:%S)T [apply] %s\n' -1 "$*" | tee -a "$LOG" >&2; }
-
-# Usage:
-#   apply_network.sh eth0 dhcp
-#   apply_network.sh eth0 static 192.168.0.156 24 192.168.0.1 [dns...]
-IFACE="${1:-}"; MODE="${2:-dhcp}"; IP="${3:-}"; CIDR="${4:-}"; GW="${5:-}"
-DNS="${*:6}"   # remaining args (space-separated list)
-
-detect_iface(){ ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {for(i=1;i<=NF;i++){if($i=="dev"){print $(i+1);exit}}}'; }
-flush_addr(){ ip addr flush dev "$1" || true; ip -6 addr flush dev "$1" || true; }
-
-[ -n "$IFACE" ] || IFACE="$(detect_iface || true)"
-IFACE="${IFACE:-eth0}"
-MODE="${MODE,,}"; [ "$MODE" = "static" ] || MODE="dhcp"
-log "requested: IFACE=$IFACE MODE=$MODE IP=$IP/$CIDR GW=$GW DNS='${DNS}'"
-
-# ===== If NetworkManager is running, use it =====
-if systemctl is-active --quiet NetworkManager; then
-  PROFILE="LEDSign-${IFACE}"
-  nmcli -t -f NAME,DEVICE c show 2>/dev/null | grep ":${IFACE}$" | cut -d: -f1 | while read -r NAME; do
-    [ "$NAME" != "$PROFILE" ] && nmcli -g NAME c show "$NAME" >/dev/null 2>&1 && nmcli c delete "$NAME" || true
-  done
-  nmcli -g NAME c show "$PROFILE" >/dev/null 2>&1 || nmcli c add type ethernet ifname "$IFACE" con-name "$PROFILE" || true
-  nmcli c mod "$PROFILE" connection.interface-name "$IFACE" connection.autoconnect yes ipv6.method ignore
-  if [ "$MODE" = "dhcp" ]; then
-    nmcli c mod "$PROFILE" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" ipv4.ignore-auto-dns no
-  else
-    nmcli c mod "$PROFILE" ipv4.method manual ipv4.addresses "${IP}/${CIDR}" ipv4.gateway "$GW"
-    if [ -n "$DNS" ]; then nmcli c mod "$PROFILE" ipv4.dns "$DNS" ipv4.ignore-auto-dns yes; else nmcli c mod "$PROFILE" ipv4.dns "" ipv4.ignore-auto-dns no; fi
-  fi
-  flush_addr "$IFACE"; nmcli c down "$PROFILE" >/dev/null 2>&1 || true; nmcli c up "$PROFILE"; log "applied via NetworkManager"; exit 0
-fi
-
-
-# -------- wifi scripts (scan + apply) --------
-WIFI_SCAN="${SCRIPTS_DIR}/wifi_scan.sh"
-WIFI_APPLY="${SCRIPTS_DIR}/apply_wifi.sh"
+# -------- Wi-Fi scripts (scan + apply) --------
 echo "==> Installing Wi-Fi scripts"
-
 sudo tee "$WIFI_SCAN" >/dev/null <<"BASH"
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -261,8 +221,8 @@ rfkill unblock wifi || true
 ip link set "$IFACE" up || true
 
 # Write a minimal, sane wpa_supplicant.conf
-sudo install -d -m 0755 /etc/wpa_supplicant
-sudo bash -c "cat > '$CONF'" <<EOF
+install -d -m 0755 /etc/wpa_supplicant
+bash -c "cat > '$CONF'" <<EOF
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
 country=US
@@ -279,16 +239,16 @@ EOPS
    fi )
 }
 EOF
-sudo chmod 600 "$CONF"
+chmod 600 "$CONF"
 
 # Stop NM if present; use dhcpcd path
 systemctl stop NetworkManager 2>/dev/null || true
 
 # Restart wpa_supplicant (if unit exists) and dhcpcd to pick up config
 if systemctl list-unit-files | grep -q '^wpa_supplicant.service'; then
-  sudo systemctl restart wpa_supplicant || true
+  systemctl restart wpa_supplicant || true
 fi
-sudo systemctl restart dhcpcd || true
+systemctl restart dhcpcd || true
 
 # Give DHCP a moment, then print current IP (best-effort)
 sleep 2
@@ -296,7 +256,45 @@ ip -4 -o addr show dev "$IFACE" | awk '{print $4}' || true
 BASH
 sudo chmod +x "$WIFI_APPLY"
 
+# -------- network apply script (fixed DNS + logging) --------
+APPLY_SH="${SCRIPTS_DIR}/apply_network.sh"
+echo "==> Installing network apply script"
+sudo tee "$APPLY_SH" >/dev/null <<"BASH"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+LOG=/var/log/ledsign-apply.log
+log(){ printf '%(%Y-%m-%d %H:%M:%S)T [apply] %s\n' -1 "$*" | tee -a "$LOG" >&2; }
 
+# Usage:
+#   apply_network.sh eth0 dhcp
+#   apply_network.sh eth0 static 192.168.0.156 24 192.168.0.1 [dns...]
+IFACE="${1:-}"; MODE="${2:-dhcp}"; IP="${3:-}"; CIDR="${4:-}"; GW="${5:-}"
+DNS="${*:6}"   # remaining args (space-separated list)
+
+detect_iface(){ ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {for(i=1;i<=NF;i++){if($i=="dev"){print $(i+1);exit}}}'; }
+flush_addr(){ ip addr flush dev "$1" || true; ip -6 addr flush dev "$1" || true; }
+
+[ -n "$IFACE" ] || IFACE="$(detect_iface || true)"
+IFACE="${IFACE:-eth0}"
+MODE="${MODE,,}"; [ "$MODE" = "static" ] || MODE="dhcp"
+log "requested: IFACE=$IFACE MODE=$MODE IP=$IP/$CIDR GW=$GW DNS='${DNS}'"
+
+# ===== If NetworkManager is running, use it =====
+if systemctl is-active --quiet NetworkManager; then
+  PROFILE="LEDSign-${IFACE}"
+  nmcli -t -f NAME,DEVICE c show 2>/dev/null | grep ":${IFACE}$" | cut -d: -f1 | while read -r NAME; do
+    [ "$NAME" != "$PROFILE" ] && nmcli -g NAME c show "$NAME" >/dev/null 2>&1 && nmcli c delete "$NAME" || true
+  done
+  nmcli -g NAME c show "$PROFILE" >/dev/null 2>&1 || nmcli c add type ethernet ifname "$IFACE" con-name "$PROFILE" || true
+  nmcli c mod "$PROFILE" connection.interface-name "$IFACE" connection.autoconnect yes ipv6.method ignore
+  if [ "$MODE" = "dhcp" ]; then
+    nmcli c mod "$PROFILE" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" ipv4.ignore-auto-dns no
+  else
+    nmcli c mod "$PROFILE" ipv4.method manual ipv4.addresses "${IP}/${CIDR}" ipv4.gateway "$GW"
+    if [ -n "$DNS" ]; then nmcli c mod "$PROFILE" ipv4.dns "$DNS" ipv4.ignore-auto-dns yes; else nmcli c mod "$PROFILE" ipv4.dns "" ipv4.ignore-auto-dns no; fi
+  fi
+  flush_addr "$IFACE"; nmcli c down "$PROFILE" >/dev/null 2>&1 || true; nmcli c up "$PROFILE"; log "applied via NetworkManager"; exit 0
+fi
 
 # ===== dhcpcd fallback =====
 CONF="/etc/dhcpcd.conf"
