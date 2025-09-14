@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+trap 'echo "[setup] ERROR at line $LINENO"; exit 1' ERR
 
 echo "==> LED Sign: starting install"
 
 # -------- knobs --------
-# Default to dhcpcd-only (matches web UI). Override at install time with:
+# Default to dhcpcd-only (matches web UI). Override with:
 #   USE_NM=true bash setup_ledsign.sh
 USE_NM="${USE_NM:-false}"
 
@@ -28,26 +29,23 @@ sudo raspi-config nonint do_wifi_country US || true
 echo "==> APT deps"
 sudo apt-get update -y
 PKGS=(
-  build-essential git python3 python3-venv python3-dev python3-pip
+  build-essential git curl jq
+  python3 python3-venv python3-dev python3-pip
   libjpeg-dev libpng-dev libfreetype6-dev pkg-config
   libtiff5-dev libatlas-base-dev cython3
-  nginx jq imagemagick
+  nginx imagemagick
+  openresolv
 )
-# Only install NetworkManager when requested
-# default is dhcpcd; only add NM when requested
 if [ "$USE_NM" = "true" ]; then
   PKGS+=(network-manager)
 else
-  PKGS+=(dhcpcd5 openresolv)   # <-- ensure DNS updates with dhcpcd
+  PKGS+=(dhcpcd5)
 fi
 sudo apt-get install -y "${PKGS[@]}"
 
-# -------- choose ONE network manager (default: dhcpcd-only) --------
-USE_NM="${USE_NM:-false}"
-
+# -------- choose ONE network manager --------
 if [ "$USE_NM" = "true" ]; then
   echo "==> Enabling NetworkManager, disabling dhcpcd"
-  sudo apt-get install -y network-manager
   sudo systemctl disable --now dhcpcd || true
   sudo systemctl enable  --now NetworkManager
   sudo mkdir -p /etc/NetworkManager/conf.d
@@ -58,12 +56,10 @@ INI
   sudo systemctl restart NetworkManager
 else
   echo "==> Enabling dhcpcd, disabling NetworkManager & networkd"
-  sudo apt-get install -y dhcpcd5
   sudo systemctl disable --now NetworkManager || true
   sudo systemctl disable --now systemd-networkd systemd-networkd-wait-online || true
   sudo systemctl unmask dhcpcd || true
   sudo systemctl enable  --now dhcpcd
-  # sanity: make sure /etc/network/interfaces isn’t pinning eth0
   if [ -f /etc/network/interfaces ] && grep -qE '^\s*iface\s+eth0\s' /etc/network/interfaces; then
     echo "==> NOTE: /etc/network/interfaces contains eth0 config; dhcpcd expects it empty."
   fi
@@ -73,14 +69,17 @@ fi
 echo "==> Creating project directories"
 mkdir -p "$ROOT_DIR" "$CONF_DIR" "$SCRIPTS_DIR"
 
-# -------- rgb-matrix lib (cloned once) --------
+# -------- rgb-matrix lib (optional) --------
 if [ ! -d "${ROOT_DIR}/ledlib" ]; then
   echo "==> Cloning hzeller/rpi-rgb-led-matrix"
-  git clone https://github.com/hzeller/rpi-rgb-led-matrix.git "${ROOT_DIR}/ledlib"
-  make -C "${ROOT_DIR}/ledlib/lib"
-  make -C "${ROOT_DIR}/ledlib/examples-api-use"
-  make -C "${ROOT_DIR}/ledlib/bindings/python"
-  ( cd "${ROOT_DIR}/ledlib/bindings/python" && sudo python3 setup.py install )
+  if git clone https://github.com/hzeller/rpi-rgb-led-matrix.git "${ROOT_DIR}/ledlib"; then
+    make -C "${ROOT_DIR}/ledlib/lib"
+    make -C "${ROOT_DIR}/ledlib/examples-api-use"
+    make -C "${ROOT_DIR}/ledlib/bindings/python"
+    ( cd "${ROOT_DIR}/ledlib/bindings/python" && sudo python3 setup.py install )
+  else
+    echo "!! Could not clone hzeller/rpi-rgb-led-matrix (network issue). Skipping build."
+  fi
 fi
 
 # -------- python venv --------
@@ -88,35 +87,31 @@ if [ ! -d "${ROOT_DIR}/venv" ]; then
   echo "==> Python venv + packages"
   python3 -m venv "${ROOT_DIR}/venv"
   "${PIP}" install --upgrade pip wheel
-  "${PIP}" install flask waitress pillow
+  "${PIP}" install flask waitress pillow werkzeug
 fi
 
-# -------- web app --------
+# -------- web app (your repo) --------
 if [ ! -d "$WEB_DIR" ]; then
   echo "==> Cloning web GUI (LEDSign_Site)"
-  git clone https://github.com/pril-debug/LEDSign_Site.git "$WEB_DIR"
+  git clone https://github.com/pril-debug/LEDSign_Site.git "$WEB_DIR" || {
+    echo "!! Could not clone LEDSign_Site (network issue). Create the directory so service still starts."
+    mkdir -p "$WEB_DIR"
+    echo 'from flask import Flask; app=Flask(__name__); @app.route("/")\n'\
+         'def ok(): return "LED Sign Web up";' > "${WEB_DIR}/app.py"
+  }
 fi
 
 # -------- configuration (settings.json + logos) --------
 SETTINGS_JSON="${CONF_DIR}/settings.json"
 if [ ! -f "$SETTINGS_JSON" ]; then
   echo "==> Writing default settings.json"
-
-  # Choose the default admin password (env override supported)
   DEFAULT_PASS="${DEFAULT_ADMIN_PASSWORD:-admin}"
-
-  # Generate a fresh password hash using Werkzeug in the project venv
-  VENV_BIN="/home/${PI_USER}/sign-controller/venv/bin"
-  if [ ! -x "${VENV_BIN}/python" ]; then
-    echo "ERROR: venv python not found at ${VENV_BIN}/python" >&2
-    exit 1
-  fi
+  VENV_BIN="${ROOT_DIR}/venv/bin"
   ADMIN_HASH="$("${VENV_BIN}/python" - <<PY
 from werkzeug.security import generate_password_hash
 print(generate_password_hash("${DEFAULT_PASS}"))
 PY
 )"
-
   install -d -m 0755 "${CONF_DIR}"
   cat > "${SETTINGS_JSON}" <<JSON
 {
@@ -131,106 +126,65 @@ PY
   "logo_path": "/home/${PI_USER}/sign-controller/config/Logo-White.png",
   "customer_logo_path": "/home/${PI_USER}/sign-controller/config/customer_logo.png",
   "web_port": 8000,
-  "auth": {
-    "username": "admin",
-    "password_hash": "${ADMIN_HASH}"
-  }
+  "auth": { "username": "admin", "password_hash": "${ADMIN_HASH}" }
 }
 JSON
-
   chown "${PI_USER}:${PI_USER}" "${SETTINGS_JSON}"
   chmod 0644 "${SETTINGS_JSON}"
 fi
 
-# placeholder white logo if missing
+# placeholder logo
 if [ ! -f "${CONF_DIR}/Logo-White.png" ]; then
   echo "==> Creating placeholder white logo"
   convert -size 256x128 xc:black -gravity center -pointsize 22 -fill white \
     -annotate 0 "LED Sign" "${CONF_DIR}/Logo-White.png"
 fi
-
-# ensure web/static logo path used by templates
 mkdir -p "${WEB_DIR}/static"
 cp -f "${CONF_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png"
 
-# -------- network apply script (robust NM + dhcpcd fallback) --------
+# -------- network apply script (fixed DNS + logging) --------
 APPLY_SH="${SCRIPTS_DIR}/apply_network.sh"
 echo "==> Installing network apply script"
-cat > "$APPLY_SH" <<"BASH"
+sudo tee "$APPLY_SH" >/dev/null <<"BASH"
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+LOG=/var/log/ledsign-apply.log
+log(){ printf '%(%Y-%m-%d %H:%M:%S)T [apply] %s\n' -1 "$*" | tee -a "$LOG" >&2; }
 
 # Usage:
 #   apply_network.sh eth0 dhcp
-#   apply_network.sh eth0 static 192.168.0.56 24 192.168.0.1 [dns...]
+#   apply_network.sh eth0 static 192.168.0.156 24 192.168.0.1 [dns...]
+IFACE="${1:-}"; MODE="${2:-dhcp}"; IP="${3:-}"; CIDR="${4:-}"; GW="${5:-}"
+DNS="${*:6}"   # remaining args (space-separated list)
 
-IFACE="${1:-}"
-MODE="${2:-dhcp}"
-IP="${3:-}"
-CIDR="${4:-}"
-GW="${5:-}"
-DNS="${*:6}"
+detect_iface(){ ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {for(i=1;i<=NF;i++){if($i=="dev"){print $(i+1);exit}}}'; }
+flush_addr(){ ip addr flush dev "$1" || true; ip -6 addr flush dev "$1" || true; }
 
-# -------- helpers --------
-detect_iface() {
-  ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {for(i=1;i<=NF;i++){if($i=="dev"){print $(i+1);exit}}}'
-}
-flush_addr() {
-  ip addr flush dev "$1" || true
-  ip -6 addr flush dev "$1" || true
-}
-
-if [ -z "${IFACE}" ]; then
-  IFACE="$(detect_iface || true)"
-fi
+[ -n "$IFACE" ] || IFACE="$(detect_iface || true)"
 IFACE="${IFACE:-eth0}"
+MODE="${MODE,,}"; [ "$MODE" = "static" ] || MODE="dhcp"
+log "requested: IFACE=$IFACE MODE=$MODE IP=$IP/$CIDR GW=$GW DNS='${DNS}'"
 
-if [ "${MODE}" != "static" ]; then MODE="dhcp"; fi
-
-# ===== Preferred: NetworkManager =====
+# ===== If NetworkManager is running, use it =====
 if systemctl is-active --quiet NetworkManager; then
   PROFILE="LEDSign-${IFACE}"
-
-  # Remove any other profiles claiming this iface
-  while read -r LINE; do
-    NAME="${LINE%%:*}"
-    DEV="${LINE##*:}"
-    if [ "$DEV" = "$IFACE" ] && [ "$NAME" != "$PROFILE" ]; then
-      nmcli -g NAME c show "$NAME" >/dev/null 2>&1 && nmcli c delete "$NAME" || true
-    fi
-  done < <(nmcli -t -f NAME,DEVICE c show | grep ":${IFACE}$" || true)
-
-  # Ensure our profile exists
-  if ! nmcli -g NAME c show "$PROFILE" >/dev/null 2>&1; then
-    nmcli c add type ethernet ifname "$IFACE" con-name "$PROFILE" || true
-  fi
-  nmcli c mod "$PROFILE" connection.interface-name "$IFACE" \
-                       connection.autoconnect yes \
-                       ipv6.method ignore
-
+  nmcli -t -f NAME,DEVICE c show 2>/dev/null | grep ":${IFACE}$" | cut -d: -f1 | while read -r NAME; do
+    [ "$NAME" != "$PROFILE" ] && nmcli -g NAME c show "$NAME" >/dev/null 2>&1 && nmcli c delete "$NAME" || true
+  done
+  nmcli -g NAME c show "$PROFILE" >/dev/null 2>&1 || nmcli c add type ethernet ifname "$IFACE" con-name "$PROFILE" || true
+  nmcli c mod "$PROFILE" connection.interface-name "$IFACE" connection.autoconnect yes ipv6.method ignore
   if [ "$MODE" = "dhcp" ]; then
     nmcli c mod "$PROFILE" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" ipv4.ignore-auto-dns no
   else
-    CIDR_MASK="${IP}/${CIDR}"
-    nmcli c mod "$PROFILE" ipv4.method manual ipv4.addresses "$CIDR_MASK" ipv4.gateway "$GW"
-    if [ -n "$DNS" ]; then
-      nmcli c mod "$PROFILE" ipv4.dns "$DNS" ipv4.ignore-auto-dns yes
-    else
-      nmcli c mod "$PROFILE" ipv4.dns "" ipv4.ignore-auto-dns no
-    fi
+    nmcli c mod "$PROFILE" ipv4.method manual ipv4.addresses "${IP}/${CIDR}" ipv4.gateway "$GW"
+    if [ -n "$DNS" ]; then nmcli c mod "$PROFILE" ipv4.dns "$DNS" ipv4.ignore-auto-dns yes; else nmcli c mod "$PROFILE" ipv4.dns "" ipv4.ignore-auto-dns no; fi
   fi
-
-  flush_addr "$IFACE"
-  nmcli c down "$PROFILE" >/dev/null 2>&1 || true
-  nmcli c up   "$PROFILE"
-  exit 0
+  flush_addr "$IFACE"; nmcli c down "$PROFILE" >/dev/null 2>&1 || true; nmcli c up "$PROFILE"; log "applied via NetworkManager"; exit 0
 fi
 
-# ===== Fallback: dhcpcd =====
+# ===== dhcpcd fallback =====
 CONF="/etc/dhcpcd.conf"
-TAG_BEGIN="# LEDSign ${IFACE} BEGIN"
-TAG_END="# LEDSign ${IFACE} END"
-
+TAG_BEGIN="# LEDSign ${IFACE} BEGIN"; TAG_END="# LEDSign ${IFACE} END"
 sudo touch "$CONF"
 sudo sed -i "/^${TAG_BEGIN}$/,/^${TAG_END}$/d" "$CONF"
 
@@ -240,11 +194,12 @@ sudo sed -i "/^${TAG_BEGIN}$/,/^${TAG_END}$/d" "$CONF"
   if [ "$MODE" = "dhcp" ]; then
     echo "  # Use DHCP"
   else
-    echo "  nodhcp"  # prevent DHCP on this interface when static
-    echo "  static ip_address=${IP}/${CIDR}"
-    [ -n "$GW" ]  && echo "  static routers=${GW}"
+    echo "nohook dhcp"
+    echo "static ip_address=${IP}/${CIDR}"
+    [ -n "$GW" ]  && echo "static routers=${GW}"
     if [ -n "$DNS" ]; then
-      echo "  static domain_name_servers=${DNS// /,}"
+      # IMPORTANT: space-separated — resolvconf expands this into multiple 'nameserver' lines.
+      echo "static domain_name_servers=${DNS}"
     fi
   fi
   echo "$TAG_END"
@@ -252,18 +207,25 @@ sudo sed -i "/^${TAG_BEGIN}$/,/^${TAG_END}$/d" "$CONF"
 
 flush_addr "$IFACE"
 sudo systemctl restart dhcpcd || true
+sleep 1
+NEWIP="$(ip -4 -o addr show dev "$IFACE" | awk '{print $4}' || true)"
+log "dhcpcd applied; current ${IFACE} addr: ${NEWIP:-unknown}"
+exit 0
+BASH
+sudo chmod +x "$APPLY_SH"
+sudo touch /var/log/ledsign-apply.log && sudo chown root:"${PI_USER}" /var/log/ledsign-apply.log && sudo chmod 664 /var/log/ledsign-apply.log
 
-
-# -------- sudoers for the web to run the script (no password) --------
+# -------- sudoers --------
 echo "==> Sudoers rule"
 SUDOERS_FILE="/etc/sudoers.d/sign-controller-web"
-SUDO_LINE="${PI_USER} ALL=(root) NOPASSWD: /usr/bin/nmcli, /usr/sbin/ip, ${APPLY_SH}"
+SUDO_LINE="${PI_USER} ALL=(root) NOPASSWD: ${APPLY_SH}, /usr/bin/nmcli, /usr/sbin/ip"
 if [ ! -f "$SUDOERS_FILE" ] || ! sudo grep -qxF "$SUDO_LINE" "$SUDOERS_FILE"; then
   echo "$SUDO_LINE" | sudo tee "$SUDOERS_FILE" >/dev/null
   sudo chmod 440 "$SUDOERS_FILE"
+  sudo visudo -cf "$SUDOERS_FILE" >/dev/null
 fi
 
-# -------- systemd service for the web --------
+# -------- systemd service --------
 echo "==> systemd: sign-web.service"
 sudo tee /etc/systemd/system/sign-web.service >/dev/null <<EOF
 [Unit]
@@ -309,10 +271,11 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo ln -sf /etc/nginx/sites-available/sign-web /etc/nginx/sites-enabled/sign-web
 sudo systemctl restart nginx
 
-# -------- ownerships --------
+# -------- perms --------
 sudo chown -R "${PI_USER}:${PI_USER}" "$ROOT_DIR"
 
 echo "==> Install complete."
 echo "Open:   http://<Pi-IP>/"
 echo "Login:  admin / admin"
-echo "Note: Changing Ethernet via dashboard will immediately bounce the NIC."
+echo "Note: Using the dashboard to change Ethernet will immediately bounce the NIC."
+echo "      Logs: sudo tail -f /var/log/ledsign-apply.log"
