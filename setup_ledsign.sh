@@ -34,8 +34,11 @@ PKGS=(
   nginx jq imagemagick
 )
 # Only install NetworkManager when requested
-if [ "$USE_NM" = "true" ]; then
+# default is dhcpcd; only add NM when requested
+if [ "${USE_NM:-false}" = "true" ]; then
   PKGS+=(network-manager)
+else
+  PKGS+=(dhcpcd5)   # <-- ensure dhcpcd exists
 fi
 sudo apt-get install -y "${PKGS[@]}"
 
