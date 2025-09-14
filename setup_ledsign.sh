@@ -48,7 +48,7 @@ pip install --upgrade pip wheel flask waitress
 
 echo "==> Cloning web GUI..."
 if [ ! -d "$WEB_DIR" ]; then
-  git clone https://github.com/pril-debug/LEDSign-Web.git "$WEB_DIR"
+ git clone https://github.com/pril-debug/LEDSign_Site.git "$WEB_DIR"
 fi
 
 echo "==> Setting up systemd service..."
