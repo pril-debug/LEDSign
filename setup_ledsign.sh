@@ -1,64 +1,67 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ---- Config ----
+echo "==> LED Sign: starting install"
+
+# -------- basics / vars --------
 if [ -z "${PI_USER:-}" ]; then
-  if id -u pi >/dev/null 2>&1; then
-    PI_USER=pi
-  else
-    PI_USER="$(whoami)"
-  fi
+  if id -u pi >/dev/null 2>&1; then PI_USER=pi; else PI_USER="$(whoami)"; fi
 fi
 HOME_DIR="$(getent passwd "$PI_USER" | cut -d: -f6)"
 ROOT_DIR="${HOME_DIR}/sign-controller"
 WEB_DIR="${ROOT_DIR}/web"
-CONFIG_DIR="${ROOT_DIR}/config"
+CONF_DIR="${ROOT_DIR}/config"
+SCRIPTS_DIR="${ROOT_DIR}/scripts"
+PY="${ROOT_DIR}/venv/bin/python"
+PIP="${ROOT_DIR}/venv/bin/pip"
 
-echo "==> Syncing system time..."
+# -------- time & apt --------
+echo "==> Syncing time / base system"
 sudo timedatectl set-ntp true || true
 sudo raspi-config nonint do_wifi_country US || true
 
-echo "==> Updating APT and installing dependencies..."
+echo "==> APT deps"
 sudo apt-get update -y
 sudo apt-get install -y \
   build-essential git python3 python3-venv python3-dev python3-pip \
   libjpeg-dev libpng-dev libfreetype6-dev pkg-config \
-  libtiff5-dev libatlas-base-dev \
-  nginx cython3 jq imagemagick wireless-tools wpasupplicant
+  libtiff5-dev libatlas-base-dev cython3 \
+  nginx jq imagemagick network-manager
 
-echo "==> Creating project structure..."
-mkdir -p "$ROOT_DIR" "$CONFIG_DIR"
-cd "$ROOT_DIR"
+# -------- project layout --------
+echo "==> Creating project directories"
+mkdir -p "$ROOT_DIR" "$CONF_DIR" "$SCRIPTS_DIR"
 
-echo "==> Cloning hzeller/rpi-rgb-led-matrix..."
-[ ! -d ledlib ] && git clone https://github.com/hzeller/rpi-rgb-led-matrix.git ledlib
-cd ledlib
-make -C lib
-make -C examples-api-use
-make -C bindings/python
+# -------- rgb-matrix lib (cloned once) --------
+if [ ! -d "${ROOT_DIR}/ledlib" ]; then
+  echo "==> Cloning hzeller/rpi-rgb-led-matrix"
+  git clone https://github.com/hzeller/rpi-rgb-led-matrix.git "${ROOT_DIR}/ledlib"
+  make -C "${ROOT_DIR}/ledlib/lib"
+  make -C "${ROOT_DIR}/ledlib/examples-api-use"
+  make -C "${ROOT_DIR}/ledlib/bindings/python"
+  ( cd "${ROOT_DIR}/ledlib/bindings/python" && sudo python3 setup.py install )
+fi
 
-echo "==> Installing Python bindings..."
-cd bindings/python
-sudo python3 setup.py install
+# -------- python venv --------
+if [ ! -d "${ROOT_DIR}/venv" ]; then
+  echo "==> Python venv + packages"
+  python3 -m venv "${ROOT_DIR}/venv"
+  "${PIP}" install --upgrade pip wheel
+  "${PIP}" install flask waitress pillow
+fi
 
-echo "==> Setting up Python virtual environment..."
-cd "$ROOT_DIR"
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip wheel flask waitress pillow
-deactivate
+# -------- web app --------
+if [ ! -d "$WEB_DIR" ]; then
+  echo "==> Cloning web GUI (LEDSign_Site)"
+  git clone https://github.com/pril-debug/LEDSign_Site.git "$WEB_DIR"
+fi
 
-echo "==> Creating default settings.json ..."
-# Generate a local-compatible hash for 'admin' using the venv's Werkzeug
-source "$ROOT_DIR/venv/bin/activate"
-ADMIN_HASH="$(python - <<'PY'
-from werkzeug.security import generate_password_hash
-print(generate_password_hash("admin"))      # default pbkdf2:sha256
-PY
-)"
-deactivate
-
-cat > "${CONFIG_DIR}/settings.json" <<JSON
+# -------- configuration (settings.json + logos) --------
+SETTINGS_JSON="${CONF_DIR}/settings.json"
+if [ ! -f "$SETTINGS_JSON" ]; then
+  echo "==> Writing default settings.json"
+  # password_hash here is for the password 'admin'
+  cat > "$SETTINGS_JSON" <<'JSON'
 {
   "led_rows": 64,
   "led_cols": 64,
@@ -68,42 +71,119 @@ cat > "${CONFIG_DIR}/settings.json" <<JSON
   "led_brightness": 80,
   "led_gpio_slowdown": 2,
   "led_hardware_mapping": "regular",
-  "logo_path": "${CONFIG_DIR}/Logo-White.png",
-  "customer_logo_path": "${CONFIG_DIR}/customer_logo.png",
+  "logo_path": "/home/PI_USER_REPL/sign-controller/config/Logo-White.png",
+  "customer_logo_path": "/home/PI_USER_REPL/sign-controller/config/customer_logo.png",
   "web_port": 8000,
   "auth": {
     "username": "admin",
-    "password_hash": "${ADMIN_HASH}"
+    "password_hash": "pbkdf2:sha256:600000$DkZ0t4KzWwW2s4Lz$3bc0d6d6a2f8db6f9b8d7f3fa5a7c5d3f9f2e1e6e0d8c2a30f5df0a39ad9fd70"
   }
 }
 JSON
-
-echo "==> Creating placeholder logo if missing..."
-if [ ! -f "${CONFIG_DIR}/Logo-White.png" ]; then
-  convert -size 256x128 xc:black -gravity center \
-    -pointsize 20 -fill white -annotate 0 "LED Sign" \
-    "${CONFIG_DIR}/Logo-White.png"
+  # replace placeholder PI_USER_REPL in JSON
+  sed -i "s|PI_USER_REPL|${PI_USER}|g" "$SETTINGS_JSON"
 fi
 
-echo "==> Cloning web GUI..."
-if [ ! -d "$WEB_DIR" ]; then
-  git clone https://github.com/pril-debug/LEDSign_Site.git "$WEB_DIR"
+# placeholder white logo if missing
+if [ ! -f "${CONF_DIR}/Logo-White.png" ]; then
+  echo "==> Creating placeholder white logo"
+  convert -size 256x128 xc:black -gravity center -pointsize 22 -fill white \
+    -annotate 0 "LED Sign" "${CONF_DIR}/Logo-White.png"
 fi
 
-echo "==> Copying logo into web static dir..."
+# ensure web/static logo path used by templates
 mkdir -p "${WEB_DIR}/static"
-cp -f "${CONFIG_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png"
+cp -f "${CONF_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png"
 
-echo "==> Setting up systemd service..."
+# -------- network apply script (NetworkManager aware) --------
+APPLY_SH="${SCRIPTS_DIR}/apply_network.sh"
+echo "==> Installing network apply script"
+cat > "$APPLY_SH" <<"BASH"
+#!/usr/bin/env bash
+set -euo pipefail
+# Usage:
+#   apply_network.sh eth0 dhcp
+#   apply_network.sh eth0 static 192.168.0.56 24 192.168.0.1 [dns...]
+IFACE="${1:-eth0}"
+MODE="${2:-dhcp}"
+IP="${3:-}"
+CIDR="${4:-}"
+GW="${5:-}"
+DNS="${*:6}"
+
+if systemctl is-active NetworkManager >/dev/null 2>&1; then
+  CONN="Wired connection 1"
+  if ! nmcli c show "$CONN" >/dev/null 2>&1; then
+    nmcli c add type ethernet ifname "$IFACE" con-name "$CONN" >/dev/null
+  fi
+
+  if [ "$MODE" = "dhcp" ]; then
+    nmcli c mod "$CONN" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" ipv4.ignore-auto-dns no
+  else
+    CIDR_MASK="${IP}/${CIDR}"
+    nmcli c mod "$CONN" ipv4.method manual ipv4.addresses "$CIDR_MASK" ipv4.gateway "$GW"
+    if [ -n "$DNS" ]; then
+      nmcli c mod "$CONN" ipv4.dns "$DNS" ipv4.ignore-auto-dns yes
+    else
+      nmcli c mod "$CONN" ipv4.dns "" ipv4.ignore-auto-dns no
+    fi
+  fi
+
+  ip addr flush dev "$IFACE" || true
+  nmcli c down "$CONN" || true
+  nmcli c up "$CONN"
+  exit 0
+fi
+
+# Fallback to dhcpcd if NM is not active
+CONF="/etc/dhcpcd.conf"
+TAG_BEGIN="# LEDSign ${IFACE} BEGIN"
+TAG_END="# LEDSign ${IFACE} END"
+
+sudo touch "$CONF"
+sudo sed -i "/^${TAG_BEGIN}$/,/^${TAG_END}$/d" "$CONF"
+
+{
+  echo "$TAG_BEGIN"
+  echo "interface ${IFACE}"
+  if [ "$MODE" = "dhcp" ]; then
+    echo "  # DHCP default"
+  else
+    echo "static ip_address=${IP}/${CIDR}"
+    [ -n "$GW" ] && echo "static routers=${GW}"
+    if [ -n "$DNS" ]; then
+      echo "static domain_name_servers=${DNS// /,}"
+    fi
+  fi
+  echo "$TAG_END"
+} | sudo tee -a "$CONF" >/dev/null
+
+sudo systemctl restart dhcpcd || true
+BASH
+chmod +x "$APPLY_SH"
+
+# -------- sudoers for the web to run the script (no password) --------
+echo "==> Sudoers rule"
+SUDOERS_FILE="/etc/sudoers.d/sign-controller-web"
+SUDO_LINE="${PI_USER} ALL=(root) NOPASSWD: /usr/bin/nmcli, /usr/sbin/ip, ${APPLY_SH}"
+if [ ! -f "$SUDOERS_FILE" ] || ! sudo grep -qxF "$SUDO_LINE" "$SUDOERS_FILE"; then
+  echo "$SUDO_LINE" | sudo tee "$SUDOERS_FILE" >/dev/null
+  sudo chmod 440 "$SUDOERS_FILE"
+fi
+
+# -------- systemd service for the web --------
+echo "==> systemd: sign-web.service"
 sudo tee /etc/systemd/system/sign-web.service >/dev/null <<EOF
 [Unit]
 Description=LED Sign Web GUI
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-User=$PI_USER
-WorkingDirectory=$WEB_DIR
-ExecStart=$ROOT_DIR/venv/bin/waitress-serve --listen=127.0.0.1:8000 app:app
+User=${PI_USER}
+WorkingDirectory=${WEB_DIR}
+Environment=PYTHONUNBUFFERED=1
+ExecStart=${ROOT_DIR}/venv/bin/waitress-serve --listen=127.0.0.1:8000 app:app
 Restart=always
 
 [Install]
@@ -113,26 +193,35 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now sign-web
 
-echo "==> Configuring nginx reverse proxy..."
-sudo tee /etc/nginx/sites-available/sign-web >/dev/null <<EOF
+# -------- nginx reverse proxy --------
+echo "==> Nginx site"
+sudo tee /etc/nginx/sites-available/sign-web >/dev/null <<'EOF'
 server {
     listen 80;
     server_name _;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    # Static assets cache
+    location /static/ {
+        proxy_pass http://127.0.0.1:8000/static/;
+        expires 7d;
     }
 }
 EOF
-
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo ln -sf /etc/nginx/sites-available/sign-web /etc/nginx/sites-enabled/sign-web
 sudo systemctl restart nginx
 
-echo "==> Done."
-echo "Visit:  http://<Pi-IP>/"
+# -------- ownerships --------
+sudo chown -R "${PI_USER}:${PI_USER}" "$ROOT_DIR"
+
+echo "==> Install complete."
+echo "Open:   http://<Pi-IP>/"
 echo "Login:  admin / admin"
+echo "Note: Changing Ethernet via dashboard will immediately bounce the NIC."
