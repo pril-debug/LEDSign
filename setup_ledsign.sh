@@ -237,10 +237,11 @@ sudo sed -i "/^${TAG_BEGIN}$/,/^${TAG_END}$/d" "$CONF"
 {
   echo "$TAG_BEGIN"
   echo "interface ${IFACE}"
-  if [ "$MODE" = "dhcp" ]; then
-    echo "  # DHCP"
-  else
-    echo "static ip_address=${IP}/${CIDR}"
+ if [ "$MODE" = "dhcp" ]; then
+  echo "  # Use DHCP"
+else
+  echo "nohook dhcp"        # <-- prevent extra DHCP on this iface
+  echo "static ip_address=${IP}/${CIDR}"
     [ -n "$GW" ]  && echo "static routers=${GW}"
     if [ -n "$DNS" ]; then
       echo "static domain_name_servers=${DNS// /,}"
