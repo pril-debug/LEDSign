@@ -49,6 +49,15 @@ pip install --upgrade pip wheel flask waitress pillow
 deactivate
 
 echo "==> Creating default settings.json ..."
+# Generate a local-compatible hash for 'admin' using the venv's Werkzeug
+source "$ROOT_DIR/venv/bin/activate"
+ADMIN_HASH="$(python - <<'PY'
+from werkzeug.security import generate_password_hash
+print(generate_password_hash("admin"))      # default pbkdf2:sha256
+PY
+)"
+deactivate
+
 cat > "${CONFIG_DIR}/settings.json" <<JSON
 {
   "led_rows": 64,
@@ -64,7 +73,7 @@ cat > "${CONFIG_DIR}/settings.json" <<JSON
   "web_port": 8000,
   "auth": {
     "username": "admin",
-    "password_hash": "pbkdf2:sha256:600000\$DkZ0t4KzWwW2s4Lz\$3bc0d6d6a2f8db6f9b8d7f3fa5a7c5d3f9f2e1e6e0d8c2a30f5df0a39ad9fd70"
+    "password_hash": "${ADMIN_HASH}"
   }
 }
 JSON
