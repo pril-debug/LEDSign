@@ -35,10 +35,10 @@ PKGS=(
 )
 # Only install NetworkManager when requested
 # default is dhcpcd; only add NM when requested
-if [ "${USE_NM:-false}" = "true" ]; then
+if [ "$USE_NM" = "true" ]; then
   PKGS+=(network-manager)
 else
-  PKGS+=(dhcpcd5)   # <-- ensure dhcpcd exists
+  PKGS+=(dhcpcd5 openresolv)   # <-- ensure DNS updates with dhcpcd
 fi
 sudo apt-get install -y "${PKGS[@]}"
 
