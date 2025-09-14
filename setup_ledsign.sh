@@ -12,6 +12,7 @@ fi
 HOME_DIR="$(getent passwd "$PI_USER" | cut -d: -f6)"
 ROOT_DIR="${HOME_DIR}/sign-controller"
 WEB_DIR="${ROOT_DIR}/web"
+CONFIG_DIR="${ROOT_DIR}/config"
 
 echo "==> Syncing system time..."
 sudo timedatectl set-ntp true || true
@@ -26,7 +27,7 @@ sudo apt-get install -y \
   nginx cython3 jq imagemagick wireless-tools wpasupplicant
 
 echo "==> Creating project structure..."
-mkdir -p "$ROOT_DIR"
+mkdir -p "$ROOT_DIR" "$CONFIG_DIR"
 cd "$ROOT_DIR"
 
 echo "==> Cloning hzeller/rpi-rgb-led-matrix..."
@@ -44,12 +45,45 @@ echo "==> Setting up Python virtual environment..."
 cd "$ROOT_DIR"
 python3 -m venv venv
 source venv/bin/activate
-pip install --upgrade pip wheel flask waitress
+pip install --upgrade pip wheel flask waitress pillow
+deactivate
+
+echo "==> Creating default settings.json ..."
+cat > "${CONFIG_DIR}/settings.json" <<JSON
+{
+  "led_rows": 64,
+  "led_cols": 64,
+  "led_chain": 2,
+  "led_parallel": 1,
+  "led_pwm_bits": 11,
+  "led_brightness": 80,
+  "led_gpio_slowdown": 2,
+  "led_hardware_mapping": "regular",
+  "logo_path": "${CONFIG_DIR}/Logo-White.png",
+  "customer_logo_path": "${CONFIG_DIR}/customer_logo.png",
+  "web_port": 8000,
+  "auth": {
+    "username": "admin",
+    "password_hash": "pbkdf2:sha256:600000\$DkZ0t4KzWwW2s4Lz\$3bc0d6d6a2f8db6f9b8d7f3fa5a7c5d3f9f2e1e6e0d8c2a30f5df0a39ad9fd70"
+  }
+}
+JSON
+
+echo "==> Creating placeholder logo if missing..."
+if [ ! -f "${CONFIG_DIR}/Logo-White.png" ]; then
+  convert -size 256x128 xc:black -gravity center \
+    -pointsize 20 -fill white -annotate 0 "LED Sign" \
+    "${CONFIG_DIR}/Logo-White.png"
+fi
 
 echo "==> Cloning web GUI..."
 if [ ! -d "$WEB_DIR" ]; then
- git clone https://github.com/pril-debug/LEDSign_Site.git "$WEB_DIR"
+  git clone https://github.com/pril-debug/LEDSign_Site.git "$WEB_DIR"
 fi
+
+echo "==> Copying logo into web static dir..."
+mkdir -p "${WEB_DIR}/static"
+cp -f "${CONFIG_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png"
 
 echo "==> Setting up systemd service..."
 sudo tee /etc/systemd/system/sign-web.service >/dev/null <<EOF
@@ -90,4 +124,6 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo ln -sf /etc/nginx/sites-available/sign-web /etc/nginx/sites-enabled/sign-web
 sudo systemctl restart nginx
 
-echo "==> Done. Visit http://<Pi-IP>/ to see the login screen."
+echo "==> Done."
+echo "Visit:  http://<Pi-IP>/"
+echo "Login:  admin / admin"
