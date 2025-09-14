@@ -1,0 +1,79 @@
+; =========================
+; FlexSign.lss  (FlexTiming / LED Sign)
+; Compact, framed, parse-friendly output for our Pi
+; =========================
+
+;;Initialization
+\10\00\02INIT,FlexSign\03\04
+
+; -------- Times --------
+;;TimeRunning
+\00\02T,running,
+\11\01%s
+\03\04
+
+;;TimePaused
+\00\02T,paused,
+\11\01%s
+\03\04
+
+;;TimeStopped
+\00\02T,stopped,
+\11\01%s
+\03\04
+
+;;TimeOfDay
+\00\02T,tod,
+\11\01%s
+\03\04
+
+; -------- Wind (optional; many meets won't use) --------
+;;Wind
+\00\02W,
+\12\01%s
+\03\04
+
+
+; -------- Results Header (repeat key race metadata before results set) --------
+;;ResultsHeader
+\00\02RH,
+\13\02%s       ; Event name
+\00,
+\13\04%s       ; Event #
+\00,
+\13\05%s       ; Round #
+\00,
+\13\06%s       ; Heat #
+\03\04
+
+; -------- Results (one frame per competitor result) --------
+;;Results
+\00\02R,
+\14\00%s       ; Place
+\00,
+\14\02%s       ; Lane
+\00,
+\14\03%s       ; Id/Bib
+\00,
+\14\04%s       ; Name
+\00,
+\14\05%s       ; Affiliation
+\00,
+\14\06%s       ; Time
+\00,
+\14\07%s       ; Delta
+\00,
+\14\09%s       ; Last Split
+\00,
+\14\0a%s       ; Laps To Go
+\03\04
+
+; -------- Messages (FinishLynx “Message” window) --------
+;;MessageHeader
+\00\02M,
+
+;;Message
+\15\00%s
+
+;;MessageTrailer
+\03\04
