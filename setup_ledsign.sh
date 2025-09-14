@@ -112,48 +112,80 @@ fi
 # ensure web/static logo path used by templates
 mkdir -p "${WEB_DIR}/static"
 cp -f "${CONF_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png"
-
-# -------- network apply script (NetworkManager aware) --------
+# -------- network apply script (robust NM + dhcpcd fallback) --------
 APPLY_SH="${SCRIPTS_DIR}/apply_network.sh"
 echo "==> Installing network apply script"
 cat > "$APPLY_SH" <<"BASH"
 #!/usr/bin/env bash
 set -euo pipefail
+
 # Usage:
 #   apply_network.sh eth0 dhcp
 #   apply_network.sh eth0 static 192.168.0.56 24 192.168.0.1 [dns...]
-IFACE="${1:-eth0}"
+
+IFACE="${1:-}"
 MODE="${2:-dhcp}"
 IP="${3:-}"
 CIDR="${4:-}"
 GW="${5:-}"
 DNS="${*:6}"
 
-if systemctl is-active NetworkManager >/dev/null 2>&1; then
-  CONN="Wired connection 1"
-  if ! nmcli c show "$CONN" >/dev/null 2>&1; then
-    nmcli c add type ethernet ifname "$IFACE" con-name "$CONN" >/dev/null
+# -------- helpers --------
+detect_iface() {
+  ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {for(i=1;i<=NF;i++){if($i=="dev"){print $(i+1);exit}}}'
+}
+flush_addr() {
+  ip addr flush dev "$1" || true
+  ip -6 addr flush dev "$1" || true
+}
+
+if [ -z "${IFACE}" ]; then
+  IFACE="$(detect_iface || true)"
+fi
+IFACE="${IFACE:-eth0}"
+
+if [ "${MODE}" != "static" ]; then MODE="dhcp"; fi
+
+# ===== Preferred: NetworkManager =====
+if systemctl is-active --quiet NetworkManager; then
+  PROFILE="LEDSign-${IFACE}"
+
+  # Remove any other profiles claiming this iface
+  while read -r LINE; do
+    NAME="${LINE%%:*}"
+    DEV="${LINE##*:}"
+    if [ "$DEV" = "$IFACE" ] && [ "$NAME" != "$PROFILE" ]; then
+      nmcli -g NAME c show "$NAME" >/dev/null 2>&1 && nmcli c delete "$NAME" || true
+    fi
+  done < <(nmcli -t -f NAME,DEVICE c show | grep ":${IFACE}$" || true)
+
+  # Ensure our profile exists
+  if ! nmcli -g NAME c show "$PROFILE" >/dev/null 2>&1; then
+    nmcli c add type ethernet ifname "$IFACE" con-name "$PROFILE" || true
   fi
+  nmcli c mod "$PROFILE" connection.interface-name "$IFACE" \
+                       connection.autoconnect yes \
+                       ipv6.method ignore
 
   if [ "$MODE" = "dhcp" ]; then
-    nmcli c mod "$CONN" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" ipv4.ignore-auto-dns no
+    nmcli c mod "$PROFILE" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" ipv4.ignore-auto-dns no
   else
     CIDR_MASK="${IP}/${CIDR}"
-    nmcli c mod "$CONN" ipv4.method manual ipv4.addresses "$CIDR_MASK" ipv4.gateway "$GW"
+    nmcli c mod "$PROFILE" ipv4.method manual ipv4.addresses "$CIDR_MASK" ipv4.gateway "$GW"
     if [ -n "$DNS" ]; then
-      nmcli c mod "$CONN" ipv4.dns "$DNS" ipv4.ignore-auto-dns yes
+      nmcli c mod "$PROFILE" ipv4.dns "$DNS" ipv4.ignore-auto-dns yes
     else
-      nmcli c mod "$CONN" ipv4.dns "" ipv4.ignore-auto-dns no
+      nmcli c mod "$PROFILE" ipv4.dns "" ipv4.ignore-auto-dns no
     fi
   fi
 
-  ip addr flush dev "$IFACE" || true
-  nmcli c down "$CONN" || true
-  nmcli c up "$CONN"
+  flush_addr "$IFACE"
+  nmcli c down "$PROFILE" >/dev/null 2>&1 || true
+  nmcli c up   "$PROFILE"
   exit 0
 fi
 
-# Fallback to dhcpcd if NM is not active
+# ===== Fallback: dhcpcd =====
 CONF="/etc/dhcpcd.conf"
 TAG_BEGIN="# LEDSign ${IFACE} BEGIN"
 TAG_END="# LEDSign ${IFACE} END"
@@ -165,10 +197,10 @@ sudo sed -i "/^${TAG_BEGIN}$/,/^${TAG_END}$/d" "$CONF"
   echo "$TAG_BEGIN"
   echo "interface ${IFACE}"
   if [ "$MODE" = "dhcp" ]; then
-    echo "  # DHCP default"
+    echo "  # DHCP"
   else
     echo "static ip_address=${IP}/${CIDR}"
-    [ -n "$GW" ] && echo "static routers=${GW}"
+    [ -n "$GW" ]  && echo "static routers=${GW}"
     if [ -n "$DNS" ]; then
       echo "static domain_name_servers=${DNS// /,}"
     fi
@@ -176,9 +208,11 @@ sudo sed -i "/^${TAG_BEGIN}$/,/^${TAG_END}$/d" "$CONF"
   echo "$TAG_END"
 } | sudo tee -a "$CONF" >/dev/null
 
+flush_addr "$IFACE"
 sudo systemctl restart dhcpcd || true
 BASH
 chmod +x "$APPLY_SH"
+
 
 # -------- sudoers for the web to run the script (no password) --------
 echo "==> Sudoers rule"
