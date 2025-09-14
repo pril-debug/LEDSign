@@ -13,7 +13,7 @@ MODES_DIR="${ROOT_DIR}/modes"
 CONFIG_DIR="${ROOT_DIR}/config"
 
 # Where to fetch the default logo from (override with: LOGO_URL=... ./setup.sh)
-LOGO_URL="${LOGO_URL:-https://raw.githubusercontent.com/pril-debug/LEDSign/main/logo.png}"
+LOGO_URL="${LOGO_URL:-https://raw.githubusercontent.com/pril-debug/LEDSign/main/Logo-White.png}"
 
 echo "==> Updating APT and installing dependencies..."
 sudo apt-get update
@@ -64,25 +64,25 @@ cat > "${CONFIG_DIR}/settings.json" <<'JSON'
   "led_brightness": 80,
   "led_gpio_slowdown": 2,
   "led_hardware_mapping": "regular",
-  "logo_path": "/home/pi/sign-controller/config/logo.png",
+  "logo_path": "/home/pi/sign-controller/config/Logo-White.png",
   "web_port": 8000
 }
 JSON
 
-echo "==> Downloading logo.png into config ..."
-if curl -fsSL "${LOGO_URL}" -o "${CONFIG_DIR}/logo.png"; then
+echo "==> Downloading Logo-White.png into config ..."
+if curl -fsSL "${LOGO_URL}" -o "${CONFIG_DIR}/Logo-White.png"; then
   echo "      Downloaded logo from ${LOGO_URL}"
 else
   echo "!!    Could not download logo from ${LOGO_URL}. Creating a placeholder instead..."
   convert -size 128x64 xc:black -gravity center \
     -pointsize 16 -fill white -annotate 0 "LED Sign" \
-    "${CONFIG_DIR}/logo.png" || true
+    "${CONFIG_DIR}/Logo-White.png" || true
 fi
 
 echo "==> Writing splash.py ..."
 cat > "${BOOT_DIR}/splash.py" <<'PY'
 #!/usr/bin/env python3
-# Shows /config/logo.png and overlays the Pi's IP at bottom-right
+# Shows /config/Logo-White.png and overlays the Pi's IP at bottom-right
 import os
 from PIL import Image, ImageDraw, ImageFont
 import json
@@ -124,7 +124,7 @@ def main():
     height = conf.get("led_rows", 64) * conf.get("led_parallel", 1)
 
     # Load logo and letterbox to panel size
-    logo_path = conf.get("logo_path", "/home/pi/sign-controller/config/logo.png")
+    logo_path = conf.get("logo_path", "/home/pi/sign-controller/config/Logo-White.png")
     base = Image.new("RGB", (width, height), (0,0,0))
     if os.path.exists(logo_path):
         logo = Image.open(logo_path).convert("RGB")
