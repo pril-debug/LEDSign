@@ -15,7 +15,6 @@ WEB_DIR="${ROOT_DIR}/web"
 
 echo "==> Syncing system time..."
 sudo timedatectl set-ntp true || true
-sudo ntpdate -u pool.ntp.org || true
 sudo raspi-config nonint do_wifi_country US || true
 
 echo "==> Updating APT and installing dependencies..."
@@ -23,7 +22,7 @@ sudo apt-get update -y
 sudo apt-get install -y \
   build-essential git python3 python3-venv python3-dev python3-pip \
   libjpeg-dev libpng-dev libfreetype6-dev pkg-config \
-  libtiff5-dev libatlas-base-dev libjasper-dev \
+  libtiff5-dev libatlas-base-dev \
   nginx cython3 jq imagemagick wireless-tools wpasupplicant
 
 echo "==> Creating project structure..."
