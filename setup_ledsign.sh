@@ -43,9 +43,10 @@ fi
 sudo apt-get install -y "${PKGS[@]}"
 
 # -------- choose ONE network manager (default: dhcpcd-only) --------
+USE_NM="${USE_NM:-false}"
+
 if [ "$USE_NM" = "true" ]; then
   echo "==> Enabling NetworkManager, disabling dhcpcd"
-  # Ensure package is present (in case someone removed it)
   sudo apt-get install -y network-manager
   sudo systemctl disable --now dhcpcd || true
   sudo systemctl enable  --now NetworkManager
@@ -56,14 +57,15 @@ plugins=keyfile
 INI
   sudo systemctl restart NetworkManager
 else
-  echo "==> Enabling dhcpcd, disabling NetworkManager"
+  echo "==> Enabling dhcpcd, disabling NetworkManager & networkd"
+  sudo apt-get install -y dhcpcd5
   sudo systemctl disable --now NetworkManager || true
+  sudo systemctl disable --now systemd-networkd systemd-networkd-wait-online || true
+  sudo systemctl unmask dhcpcd || true
   sudo systemctl enable  --now dhcpcd
-  # Make sure /etc/network/interfaces isn't statically pinning eth0
-  if [ -f /etc/network/interfaces ]; then
-    if grep -qE '^\s*iface\s+eth0\s' /etc/network/interfaces; then
-      echo "==> WARNING: /etc/network/interfaces has eth0 config; dhcpcd expects it empty. Consider removing that stanza."
-    fi
+  # sanity: make sure /etc/network/interfaces isn’t pinning eth0
+  if [ -f /etc/network/interfaces ] && grep -qE '^\s*iface\s+eth0\s' /etc/network/interfaces; then
+    echo "==> NOTE: /etc/network/interfaces contains eth0 config; dhcpcd expects it empty."
   fi
 fi
 
