@@ -2,7 +2,18 @@
 set -euo pipefail
 
 # ---- Config ----
-PI_USER="${PI_USER:-pi}"
+# Pick pi if it exists; otherwise use the current login
+if [ -z "${PI_USER:-}" ]; then
+  if id -u pi >/dev/null 2>&1; then
+    PI_USER=pi
+  else
+    PI_USER="$(whoami)"
+  fi
+fi
+
+# Resolve that user's home dir (works even if run via sudo/root)
+HOME_DIR="$(getent passwd "$PI_USER" | cut -d: -f6)"
+: "${HOME_DIR:="/home/$PI_USER"}"
 HOME_DIR="/home/${PI_USER}"
 ROOT_DIR="${HOME_DIR}/sign-controller"
 LEDLIB_DIR="${ROOT_DIR}/ledlib"
