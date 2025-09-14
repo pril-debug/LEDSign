@@ -144,7 +144,7 @@ if [ ! -f "${CONF_DIR}/Logo-White.png" ]; then
   convert -size 256x128 xc:black -gravity center -pointsize 22 -fill white \
     -annotate 0 "LED Sign" "${CONF_DIR}/Logo-White.png"
 fi
-mkdir -p "${WEB_DIR}/static}"
+mkdir -p "${WEB_DIR}/static"
 cp -f "${CONF_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png" || true
 
 # -------- Wi-Fi scripts (scan + apply) --------
