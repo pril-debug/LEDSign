@@ -237,14 +237,14 @@ sudo sed -i "/^${TAG_BEGIN}$/,/^${TAG_END}$/d" "$CONF"
 {
   echo "$TAG_BEGIN"
   echo "interface ${IFACE}"
- if [ "$MODE" = "dhcp" ]; then
-  echo "  # Use DHCP"
-else
-  echo "nohook dhcp"        # <-- prevent extra DHCP on this iface
-  echo "static ip_address=${IP}/${CIDR}"
-    [ -n "$GW" ]  && echo "static routers=${GW}"
+  if [ "$MODE" = "dhcp" ]; then
+    echo "  # Use DHCP"
+  else
+    echo "  nodhcp"  # prevent DHCP on this interface when static
+    echo "  static ip_address=${IP}/${CIDR}"
+    [ -n "$GW" ]  && echo "  static routers=${GW}"
     if [ -n "$DNS" ]; then
-      echo "static domain_name_servers=${DNS// /,}"
+      echo "  static domain_name_servers=${DNS// /,}"
     fi
   fi
   echo "$TAG_END"
@@ -252,8 +252,7 @@ else
 
 flush_addr "$IFACE"
 sudo systemctl restart dhcpcd || true
-BASH
-chmod +x "$APPLY_SH"
+
 
 # -------- sudoers for the web to run the script (no password) --------
 echo "==> Sudoers rule"
