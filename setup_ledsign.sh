@@ -3,6 +3,11 @@ set -euo pipefail
 
 echo "==> LED Sign: starting install"
 
+# -------- knobs --------
+# Default to dhcpcd-only (matches web UI). Override at install time with:
+#   USE_NM=true bash setup_ledsign.sh
+USE_NM="${USE_NM:-false}"
+
 # -------- basics / vars --------
 if [ -z "${PI_USER:-}" ]; then
   if id -u pi >/dev/null 2>&1; then PI_USER=pi; else PI_USER="$(whoami)"; fi
@@ -22,11 +27,42 @@ sudo raspi-config nonint do_wifi_country US || true
 
 echo "==> APT deps"
 sudo apt-get update -y
-sudo apt-get install -y \
-  build-essential git python3 python3-venv python3-dev python3-pip \
-  libjpeg-dev libpng-dev libfreetype6-dev pkg-config \
-  libtiff5-dev libatlas-base-dev cython3 \
-  nginx jq imagemagick network-manager
+PKGS=(
+  build-essential git python3 python3-venv python3-dev python3-pip
+  libjpeg-dev libpng-dev libfreetype6-dev pkg-config
+  libtiff5-dev libatlas-base-dev cython3
+  nginx jq imagemagick
+)
+# Only install NetworkManager when requested
+if [ "$USE_NM" = "true" ]; then
+  PKGS+=(network-manager)
+fi
+sudo apt-get install -y "${PKGS[@]}"
+
+# -------- choose ONE network manager (default: dhcpcd-only) --------
+if [ "$USE_NM" = "true" ]; then
+  echo "==> Enabling NetworkManager, disabling dhcpcd"
+  # Ensure package is present (in case someone removed it)
+  sudo apt-get install -y network-manager
+  sudo systemctl disable --now dhcpcd || true
+  sudo systemctl enable  --now NetworkManager
+  sudo mkdir -p /etc/NetworkManager/conf.d
+  sudo tee /etc/NetworkManager/conf.d/10-keyfile.conf >/dev/null <<'INI'
+[main]
+plugins=keyfile
+INI
+  sudo systemctl restart NetworkManager
+else
+  echo "==> Enabling dhcpcd, disabling NetworkManager"
+  sudo systemctl disable --now NetworkManager || true
+  sudo systemctl enable  --now dhcpcd
+  # Make sure /etc/network/interfaces isn't statically pinning eth0
+  if [ -f /etc/network/interfaces ]; then
+    if grep -qE '^\s*iface\s+eth0\s' /etc/network/interfaces; then
+      echo "==> WARNING: /etc/network/interfaces has eth0 config; dhcpcd expects it empty. Consider removing that stanza."
+    fi
+  fi
+fi
 
 # -------- project layout --------
 echo "==> Creating project directories"
@@ -76,7 +112,6 @@ print(generate_password_hash("${DEFAULT_PASS}"))
 PY
 )"
 
-  # Write the JSON with real user paths and the generated hash
   install -d -m 0755 "${CONF_DIR}"
   cat > "${SETTINGS_JSON}" <<JSON
 {
@@ -112,6 +147,7 @@ fi
 # ensure web/static logo path used by templates
 mkdir -p "${WEB_DIR}/static"
 cp -f "${CONF_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png"
+
 # -------- network apply script (robust NM + dhcpcd fallback) --------
 APPLY_SH="${SCRIPTS_DIR}/apply_network.sh"
 echo "==> Installing network apply script"
@@ -213,7 +249,6 @@ sudo systemctl restart dhcpcd || true
 BASH
 chmod +x "$APPLY_SH"
 
-
 # -------- sudoers for the web to run the script (no password) --------
 echo "==> Sudoers rule"
 SUDOERS_FILE="/etc/sudoers.d/sign-controller-web"
@@ -259,7 +294,6 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
-    # Static assets cache
     location /static/ {
         proxy_pass http://127.0.0.1:8000/static/;
         expires 7d;
