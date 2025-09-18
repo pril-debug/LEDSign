@@ -1,0 +1,15 @@
+# /sign-controller/scripts/sign-ui.service
+[Unit]
+Description=LED Sign UI (Splash + Menu)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=%i
+WorkingDirectory=/home/%i/sign-controller
+ExecStart=/home/%i/sign-controller/venv/bin/python boot/splash.py
+Restart=always
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
