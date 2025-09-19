@@ -84,13 +84,24 @@ echo "==> Creating project directories"
 mkdir -p "$ROOT_DIR" "$CONF_DIR" "$SCRIPTS_DIR"
 
 # -------- clone/update app repo (LEDSign) --------
-if [ ! -d "${ROOT_DIR}/.git" ]; then
+mkdir -p "$(dirname "$ROOT_DIR")"
+if [ -d "${ROOT_DIR}/.git" ]; then
+  echo "==> Updating app repo"
+  ( cd "$ROOT_DIR" && git fetch origin "$APP_REPO_BRANCH" && git reset --hard "origin/${APP_REPO_BRANCH}" )
+elif [ ! -d "$ROOT_DIR" ] || [ -z "$(ls -A "$ROOT_DIR" 2>/dev/null)" ]; then
   echo "==> Cloning app repo: ${APP_REPO_URL} (${APP_REPO_BRANCH})"
   git clone --branch "$APP_REPO_BRANCH" --depth 1 "$APP_REPO_URL" "$ROOT_DIR"
 else
-  echo "==> Updating app repo"
-  ( cd "$ROOT_DIR" && git fetch origin "$APP_REPO_BRANCH" && git reset --hard "origin/${APP_REPO_BRANCH}" )
+  echo "==> Converting existing directory to repo checkout"
+  ( cd "$ROOT_DIR" \
+    && git init \
+    && (git remote add origin "$APP_REPO_URL" 2>/dev/null || git remote set-url origin "$APP_REPO_URL") \
+    && git fetch origin "$APP_REPO_BRANCH" \
+    && git reset --hard "origin/${APP_REPO_BRANCH}" )
 fi
+
+# now create subdirs that live alongside the repo contents
+mkdir -p "$CONF_DIR" "$SCRIPTS_DIR"
 
 # Sanity: require expected directories; fail hard if missing
 for p in "boot/splash.py" "modes" "scripts"; do
