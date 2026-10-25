@@ -161,10 +161,11 @@ sudo install -d -m 0755 /usr/local/libexec/flexclock
 sudo install -o root -g root -m 0755 "${SCRIPTS_DIR}/web_network.py" /usr/local/libexec/flexclock/web_network.py
 sudo install -o root -g root -m 0755 "${SCRIPTS_DIR}/web_hostname.py" /usr/local/libexec/flexclock/web_hostname.py
 SUDOERS_FILE="/etc/sudoers.d/sign-controller-web"
-printf '%s ALL=(root) NOPASSWD: /usr/local/libexec/flexclock/web_network.py scan, /usr/local/libexec/flexclock/web_network.py wifi, /usr/local/libexec/flexclock/web_network.py ethernet, /usr/local/libexec/flexclock/web_hostname.py ""\n' "$PI_USER" | sudo tee "$SUDOERS_FILE" >/dev/null
+printf '%s ALL=(root) NOPASSWD: /usr/local/libexec/flexclock/web_network.py scan, /usr/local/libexec/flexclock/web_network.py wifi, /usr/local/libexec/flexclock/web_network.py ethernet, /usr/local/libexec/flexclock/web_network.py wifi_address, /usr/local/libexec/flexclock/web_hostname.py ""\n' "$PI_USER" | sudo tee "$SUDOERS_FILE" >/dev/null
 sudo chmod 0440 "$SUDOERS_FILE"
 sudo visudo -cf "$SUDOERS_FILE"
-# Network writes remain locked: do not create /etc/flexclock-network-enabled here.
+# Configure only wlan0; preserve the installed manager and all Ethernet settings.
+sudo bash "${SCRIPTS_DIR}/setup_wifi.sh"
 "${PIP}" install -r "${WEB_DIR}/requirements.txt"
 
 # -------- systemd: sign-web.service (Flask via waitress behind Nginx) --------

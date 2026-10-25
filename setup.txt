@@ -1,218 +1,171 @@
-FlexClock website installation and supervised verification
-========================================================
-Scope: Flask configuration website only. Do not run the installer against a live
-race sign without reviewing its package, nginx and service changes. It was NOT run
-as part of this redesign. No live network changes or service restarts were made.
+FlexClock — Full-Color LED Race Clock
+Installation, updates and network management
+===========================================
 
-Repository ownership
---------------------
-LEDSign owns setup_ledsign.sh and scripts/web_network.py. web/ is an independent
-LEDSign_Site Git repository, not tracked content of LEDSign. Ship BOTH changesets.
-The installer clones/fast-forwards LEDSign_Site; publish the reviewed web changes
-there before using it on a fresh image. Do not reset either repository. Existing
-settings.json and uploaded logos remain untouched. Commit and record the exact
-reviewed revisions of both repositories for a release; mutable main is not a
-reproducible version pin. No release was published by this task.
+Repositories and configuration
+------------------------------
+/home/admin/sign-controller is LEDSign. Its web/ directory is the separate
+LEDSign_Site repository. Publish compatible versions in both repositories.
+Never reset working checkouts or include config/, passwords, runtime secrets,
+virtual environments or customer-uploaded assets in Git. Existing settings.json
+and logos are retained. Back up configuration privately before system changes.
+Use the exact reviewed commit pair from the deployment report for reproduction.
+The general installer still follows main; pin release revisions for distribution.
 
-Fresh image
------------
-Use Raspberry Pi OS with dhcpcd + wpa_supplicant for this backend. Bookworm images
-using NetworkManager require a separately reviewed manager migration or a future
-NM backend. The installer deliberately does not switch or stop network managers.
-Install/configure dhcpcd on a fresh image only if that stack is intended. Establish
-Ethernet and correct Wi-Fi regulatory country using OS provisioning first.
-The website never restricts frequency. WPA/WPA2 Personal and open networks are
-supported; WPA3-only/enterprise require OS setup. Python requirements remain in
-web/requirements.txt. The setup script installs them and a root-owned helper.
-Run the installer only after both reviewed repository revisions are available.
-It preserves an existing controller unit and does not start the controller.
-The legacy sign-ui/run-ui.sh mismatch needs a separate controller owner decision.
+Website runtime
+---------------
+Flask/Waitress runs as the device user under sign-web, behind nginx on port 80.
+Install only missing dependencies from web/requirements.txt; do not downgrade
+already functioning packages merely to match older version pins. No frontend
+build step is needed. The current environment passed tests with Flask 3.1.2,
+Werkzeug 3.1.3, Pillow 11.3.0 and Waitress 3.0.2.
+The installer updates checkouts by fast-forward only, preserves the installed
+network manager, and does not start the LED controller. Do not use the complete
+installer for a small update to an existing device.
+The previously installed sign-ui unit incorrectly launches a duplicate website.
+It was stopped with approval. Do not start it or enable a second web process on
+port 8000; controller startup repair is separate from website deployment.
 
-Existing device deployment (not executed)
------------------------------------------
-First back up config/ and both checkouts securely. Keep backups of credentials
-outside version control. Install from these reviewed local files:
+Wi-Fi setup for the installed network stack
+------------------------------------------
+This installation uses dhcpcd with wpa_supplicant. NetworkManager is installed but
+inactive. The generic wpa_supplicant D-Bus service does not by itself attach wlan0.
+The missing wlan0 control socket was caused by having neither an interface unit
+nor a dhcpcd wpa_supplicant startup hook and no Wi-Fi configuration file.
 
-cd /home/admin/sign-controller
-venv/bin/pip install -r web/requirements.txt
+For this stack, the reproducible interface setup is:
+  sudo bash /home/admin/sign-controller/scripts/setup_wifi.sh
+The script creates/preserves /etc/wpa_supplicant/wpa_supplicant-wlan0.conf, enables
+saving via update_config=1, configures its control socket, preserves saved network
+blocks, and uses the regulatory country already selected in the OS. Set the
+correct country during OS provisioning; no frequency restriction is imposed by
+the website. The script enables/starts only wpa_supplicant@wlan0.service. If
+another working supplicant already controls wlan0, it leaves that setup alone.
+It refuses a conflicting active NetworkManager stack and never switches managers
+or resets Ethernet. It first runs the DHCP client upgrade below when necessary. The installer invokes this setup
+for fresh deployments using the supported stack.
+
+Install helpers and narrow permissions
+-------------------------------------
 sudo install -d -m 0755 /usr/local/libexec/flexclock
 sudo install -o root -g root -m 0755 scripts/web_network.py /usr/local/libexec/flexclock/web_network.py
 sudo install -o root -g root -m 0755 scripts/web_hostname.py /usr/local/libexec/flexclock/web_hostname.py
 
-Replace the old broad sudoers rule (after review), using sudo visudo -f
-/etc/sudoers.d/sign-controller-web. Exact content for this device:
-admin ALL=(root) NOPASSWD: /usr/local/libexec/flexclock/web_network.py scan, /usr/local/libexec/flexclock/web_network.py wifi, /usr/local/libexec/flexclock/web_network.py ethernet, /usr/local/libexec/flexclock/web_hostname.py ""
+Use visudo to install this rule for the actual device user (admin here):
+admin ALL=(root) NOPASSWD: /usr/local/libexec/flexclock/web_network.py scan, /usr/local/libexec/flexclock/web_network.py wifi, /usr/local/libexec/flexclock/web_network.py wifi_address, /usr/local/libexec/flexclock/web_network.py ethernet, /usr/local/libexec/flexclock/web_hostname.py ""
 
-sudo visudo -cf /etc/sudoers.d/sign-controller-web
-sudo systemctl restart sign-web
+Validate with sudo visudo -c before deploying. Helpers must remain root-owned;
+never grant sudo to user-writable scripts or arbitrary network commands.
+The old /etc/flexclock-network-enabled file is no longer used. There is no
+commissioning-file gate. Authentication, CSRF, explicit application confirmation,
+root-side validation, interface allowlists and active-stack checks remain.
+Mutating helper calls are serialized with a root-owned /run lock to avoid
+simultaneous connection/configuration changes. Scans remain read-only queries.
 
-That last command deploys the website and requires a planned service restart;
-it has not been executed. Do not restart sign-ui or any network service.
-The website creates config/.web-secret (0600) on first import. Preserve it across
-worker/service restarts; exclude it from version control. SC_SECRET may override
-it. Use TLS at nginx on untrusted networks; set SESSION_COOKIE_SECURE when TLS
-is enabled. Sessions expire after eight hours; password changes invalidate all
-sessions. The existing username/hash is retained. New passwords need at least 5 characters; there are no character-class requirements.
+Using Wi-Fi
+-----------
+Scan Networks lists each named network once with its strongest observed signal.
+Select it or enter a hidden network name, choose security, enter the password and
+Connect. WPA/WPA2 Personal and open networks are supported. Enterprise/WPA3-only
+networks require additional OS configuration. Passwords are received on stdin,
+converted to a derived PSK, never echoed or logged, and saved in the OS Wi-Fi file
+with mode 0600. The Wi-Fi interface unit uses UMask=0077, and the helper
+reasserts 0600 after saving so wpa_supplicant cannot leave credentials world-readable. Do not publish that file or even the derived PSK.
+The helper listens for authentication errors, verifies association with the
+requested network, saves the profile only after association, and separately waits
+for an IP address. No IP is reported as a warning, not a fully working connection.
+Failed attempts remove the temporary profile and reload previously saved Wi-Fi
+settings. Replacing a saved network removes duplicate profiles only on success.
+Disconnect disables saved profiles and saves that choice before disconnecting;
+connecting again enables the selected profile. No Ethernet change is involved.
 
-Read-only commissioning checks
------------------------------
-systemctl is-active NetworkManager dhcpcd wpa_supplicant
-systemctl show sign-web sign-ui -p ActiveState -p ExecStart
-ip -j address
-ip route show
-wpa_cli -i wlan0 ping
-wpa_cli -i wlan0 status
-ss -lntu
+Wi-Fi DHCP and static addressing
+-------------------------------
+The separate Wi-Fi Address form offers Automatic (DHCP) or Fixed address (Static).
+Static requires IP, dotted subnet mask, gateway and DNS. The helper validates
+again, rejects an address used by the other connection, backs up dhcpcd.conf and
+replaces only the tagged wlan0 block. It runs only dhcpcd -n wlan0. A metric of
+3000 keeps the existing Ethernet metric (1002 on this device) preferred.
+DHCP verification requires a dynamic address; static verification requires the
+requested address and mask without the old DHCP flag. Thus a stale address does
+not count as proof the new setting applied. Saved settings and application are
+reported separately if no matching address appears.
+These Wi-Fi address settings apply to wlan0 across saved Wi-Fi networks. They are
+not separate address profiles per SSID. Choose DHCP before moving to a different
+network if a fixed address is not appropriate for it.
+Ethernet uses its separate tagged block and dhcpcd -n eth0 only after confirmation.
+The backup is /etc/dhcpcd.conf.flexclock-backup; each address change replaces it.
+Private deployment backups retain the original state. Normal address changes never restart the shared daemon. The one-time
+client upgrade below replaces its running process while preserving addresses. Do not apply Ethernet changes merely to test the website.
 
-On the inspected device: dhcpcd and wpa_supplicant active, NetworkManager inactive;
-eth0 had a DHCP address, wlan0 had no address, and wpa_cli ping could not find the
-wlan0 control socket. Do not enable writes until the socket is fixed through
-supervised OS configuration. A generic active wpa_supplicant service is NOT proof
-it manages wlan0. Confirm its unit invocation, config location, ctrl_interface,
-update_config=1 and write permissions. Do not overwrite saved network blocks or
-start competing instances. Any necessary service operation needs prior approval.
-
-Wi-Fi test approval and exact command plan
------------------------------------------
-The network helper refuses writes unless root has explicitly commissioned it:
-  sudo touch /etc/flexclock-network-enabled
-Do not execute this now. Approval is needed first, along with resolving the
-missing socket. Scan is separate: sudo -n /usr/local/libexec/flexclock/web_network.py scan
-executes iw dev wlan0 scan. The scan was NOT run by this task.
-
-The website calls the root-owned helper with JSON via stdin. For connect:
-  wpa_cli -i wlan0 ping
-  wpa_cli -i wlan0 add_network                  # returns ID
-  wpa_cli -i wlan0 set_network ID ssid HEX_SSID
-  wpa_cli -i wlan0 set_network ID scan_ssid 1
-  wpa_cli -i wlan0 set_network ID key_mgmt WPA-PSK  # NONE for open
-  wpa_cli -i wlan0 set_network ID psk DERIVED_KEY   # omitted for open
-  wpa_cli -i wlan0 select_network ID
-  wpa_cli -i wlan0 status                      # poll up to 20 seconds
-  wpa_cli -i wlan0 save_config                 # after matching COMPLETED + ID
-  ip -4 -o addr show dev wlan0
-Failure cleanup: wpa_cli -i wlan0 remove_network ID; wpa_cli -i wlan0 reconfigure.
-Disconnect: wpa_cli -i wlan0 disable_network all; save_config; disconnect.
-All commands target wlan0. No eth0 flush, manager switch or global restart.
-The passphrase is delivered over stdin and converted to a derived key, never
-included verbatim in a process argument or log. Derived keys are still secrets.
-Saved profiles accumulate when switching; profile deletion/dedup is future work.
-
-With Ethernet continuously monitored from another terminal, approve and test a
-known WPA2 network, an incorrect password, an open network and a hidden SSID.
-Compare eth0 addresses/routes before and after. Verify association using wpa_cli
-and verify assigned IPv4 separately with ip. Verify reachability over each
-interface from another machine. Saving a profile alone does not establish reboot
-persistence. Schedule an explicitly approved reboot separately and repeat checks.
-Do not reboot as part of automated tests. Lock again after testing:
-  sudo rm /etc/flexclock-network-enabled
-
-Ethernet verification (mocked first; NO live test performed)
-----------------------------------------------------------
-Review DHCP/static values in the Network form and its confirmation. The helper
-validates IPv4, subnet, gateway and DNS, backs up /etc/dhcpcd.conf to
-/etc/dhcpcd.conf.flexclock-backup, replaces only the LEDSign eth0 tagged block,
-and executes: dhcpcd -n eth0
-It rejects unmanaged interface eth0/profile declarations. No manager restart.
-A rebind request is not proof of DHCP success. Do not exercise on the live device
-during automated tests. For a future approved static test reconnect at the new
-IP. For DHCP obtain the address from the router. Keep console access for manual
-recovery. A failed rebind may leave the saved config changed; inspect the backup
-before an approved restore/rebind. Each apply replaces the prior backup.
-
-Safe automated verification
+Website behavior and access
 ---------------------------
-cd /home/admin/sign-controller
+Ethernet and Wi-Fi each have visible connection details and settings. Gateways,
+DNS and subnet masks come from per-interface OS observations, not raw output.
+No expandable sections, Linux commands or developer diagnostics belong on normal
+configuration pages. Confirmation uses the shared application modal, never a
+browser confirm dialog. Static CSS/JS URLs carry content hashes to bypass cache.
+
+Admin passwords require 5–128 characters with no character-class rules. Current
+password and matching confirmation are required; hashes are saved atomically and
+all sessions are invalidated after a change. config/.web-secret (0600) must survive
+worker/service restarts and stay outside Git. SC_SECRET can override it. Use TLS
+and SESSION_COOKIE_SECURE on untrusted networks.
+Mixed-case device names normalize to lowercase (FlexClock1 -> flexclock1) before
+both Flask and the root helper validate. Hostname changes use hostnamectl and are
+verified after saving. Name-discovery and OS /etc/hosts aliases may need separate
+OS provisioning; no network-manager restart is needed for a hostname change.
+
+Logging
+-------
+The authenticated Logging page shows searchable, plain-language activity for five
+allowlisted services, including the actual wpa_supplicant@wlan0 Wi-Fi service.
+Queries cover up to 1,000 entries in the selected hour/day/week and paginate 50
+results. Search applies to displayed messages and service names. Raw traces,
+passwords and commands are not exposed. Unknown diagnostics are summarized.
+The current admin user can read journals via adm; fresh installations give only
+sign-web SupplementaryGroups=systemd-journal. No sudo journal command is needed.
+
+Testing and deployment
+----------------------
 venv/bin/python -m unittest discover -s web/tests -v
-bash -n setup_ledsign.sh scripts/apply_wifi.sh scripts/apply_network.sh scripts/wifi_scan.sh
-venv/bin/python -m py_compile web/app.py web/device.py scripts/web_network.py
+venv/bin/python -m py_compile web/app.py web/device.py web/activity.py scripts/web_network.py scripts/web_hostname.py
+bash -n setup_ledsign.sh scripts/setup_wifi.sh
 
-Tests use temporary settings/logos and mocked disruptive operations. Do not use
-real credentials or network mutations. Browser visual verification at desktop,
-tablet and phone widths is still required; no browser automation is installed on
-this Pi. Check keyboard focus, scan selection, confirmation dialogs, error states
-and loading feedback. Test current logo visibility on the actual LED separately;
-web image rendering does not prove controller consumption.
+Automated tests mock disruptive operations and use temporary credentials/settings.
+For the live Riley test, the user explicitly authorized Wi-Fi configuration and
+connection changes while keeping Ethernet connected. No real admin password or
+hostname change is required. Never store the supplied Wi-Fi password in a test
+fixture, source file, report or repository.
 
-
-Full-Color LED Race Clock redesign — October 25, 2026
----------------------------------------------------
-Current product name: FlexClock — Full-Color LED Race Clock. Shared sidebar and
-mobile navigation, colored status cards, separate connection summaries, grouped
-Settings, saved-logo previews and RGB clock presentation replace the original UI.
-Static asset URLs include a content hash to bypass the previous cached CSS/JS.
-No new dependencies or frontend build step are needed.
-
-Password policy: minimum 5, maximum 128 characters. No uppercase, lowercase,
-number or symbol requirement; no strength meter. The current password is required.
-Storage remains hashed; password changes invalidate existing sessions.
-
-Hostname management uses the installed /usr/bin/hostnamectl mechanism. The separate
-root-owned /usr/local/libexec/flexclock/web_hostname.py helper takes JSON on stdin,
-accepts only 1–63 lowercase ASCII letters/numbers/hyphens with alphanumeric ends,
-and rejects requests without explicit confirmation. sudoers permits no command
-arguments for this helper, denoted by the empty double quotes in the rule above.
-Flask requires a valid authenticated session, CSRF token and confirmation checkbox.
-The helper revalidates input, runs hostnamectl without a shell, then checks the
-saved static name. It does not restart network services or the LED controller.
-Its commands after a confirmed request are exactly:
-  /usr/bin/hostnamectl set-hostname VALIDATED_NAME
-  /usr/bin/hostnamectl --static
-A failure to verify is reported as such; it is not described as success.
-Hostname changes may affect name-based discovery; do not promise immediate mDNS
-or DHCP propagation. No hostname change was executed during development/tests.
-The hostname setting is separate from the network-write guard. Do not enable
-/etc/flexclock-network-enabled when deploying this helper.
-
-Deployment for this revision: install only the additional hostname helper and
-validate/install the revised narrow sudoers file, then restart only sign-web.
-Preserve the current hostname, password, device config, assets and other services.
-The complete installer is not needed for an existing Pi.
-
-Verification: run the existing web unittest command (now 28 tests). The new
-hostname operations are mocked. Browser checks, an approved real hostname
-change/name discovery check and Wi-Fi commissioning remain separate live tests.
-Inspect sign-ui restart counts in System Information; a restarting service is
-reported as needing attention, not as a healthy starting controller.
-
-Device-name input correction
-----------------------------
-Mixed-case device names are accepted in the form and normalized before validation
-and saving: FlexClock1 becomes flexclock1. The root-owned hostname helper also
-normalizes its JSON input. Install the updated scripts/web_hostname.py at the
-existing /usr/local/libexec/flexclock/web_hostname.py path; permissions and sudoers
-are unchanged. Restart only sign-web to deploy the updated Flask code.
-Confirmation uses the shared application modal, with Cancel/Escape and Confirm;
-the device-name form no longer requires a redundant confirmation checkbox.
-Do not change the real hostname as part of automated tests or deployment.
+Deploy reviewed website code/helper/sudoers and restart only sign-web. A Wi-Fi
+service restart for persistence testing is separate and must be authorized.
+Verify association, assigned IP, DNS, gateway reachability bound to wlan0, Ethernet
+address/route preservation, and reconnect from the saved profile. Enabling the
+interface service and saving settings prepare reboot persistence; they do not
+prove it. Do not claim a reboot test unless an actual reboot was performed.
+Browser rendering remains a separate desktop/tablet/mobile check if no browser
+is available. Physical LED control and FinishLynx integration remain separate.
 
 
-Service activity / Logging
---------------------------
-The authenticated /logs page reads only the five allowlisted service journals.
-Queries are bounded to 1,000 recent entries in a selected hour/day/week, with
-search, severity filters and 50-event pages. Recognized service events are shown
-in plain language; unknown diagnostic output is summarized rather than exposed.
-The page is read-only and never restarts or changes services. It does not persist
-or expose credentials, raw traces or command lines. Search applies to displayed
-messages and service names, not raw diagnostic text.
-The existing admin account belongs to adm and can already read the system journal.
-Fresh installs add SupplementaryGroups=systemd-journal to sign-web only. No new
-sudo permission or dependency is required. If history cannot be read, the page
-reports that it is unavailable rather than presenting an empty success state.
-Restart only sign-web after deploying this revision. Do not restart other services.
+Required DHCP client fix on Debian 12
+------------------------------------
+The original dhcpcd 9.4.1 control interface returned success without applying some
+interface updates (journal: cannot handle another client). Do not count a rebind
+exit code as proof. The signed Debian Bookworm backport 1:10.1.0-11~bpo12+3 was
+installed for dhcpcd-base, dhcpcd and dhcpcd5; no other packages were upgraded.
+Package information: https://packages.debian.org/bookworm-backports/dhcpcd-base
 
-Network page layout and connection details
-------------------------------------------
-Ethernet and Wi-Fi each have one column containing status, current connection
-facts and their own settings. Narrow screens stack complete columns. No details,
-commands or configuration values are hidden behind expandable controls.
-Read-only observations use ip -j address, ip -j -4 route show, resolvconf -l and
-iw dev wlan0 link. DNS entries are matched to their source interface, not copied
-from another connection. Gateways are extracted as addresses; subnet prefixes
-are displayed as dotted subnet masks. Unknown values remain Unavailable.
-The static-address form accepts a dotted subnet mask; older CIDR form payloads
-remain compatible. Confirmations use the existing application modal. Helper
-errors stay in server logs; the page uses short user-facing errors. No additional
-packages, permissions, network service changes or sudoers rules are needed.
-Deploy with a restart of sign-web only. Do not apply live network settings.
+Reproduce the one-time repair with:
+  sudo bash scripts/upgrade_network.sh
+setup_wifi.sh calls it automatically. Version 10.1 or newer is left unchanged.
+The script adds the official signed Bookworm backports source, keeps existing
+config files and requires persistent address handling before handoff. It replaces
+the old daemon using SIGTERM (its old control socket is broken) then starts the
+new daemon. Existing kernel addresses/routes stay installed. During the actual
+upgrade, Ethernet monitoring received 150/150 gateway replies, with no packet
+loss; the Ethernet IP and routes remained unchanged. Subsequent DHCP/static
+updates use only the selected interface and the fixed control interface.
+The tested package version is pinned in the script; DHCPCD_VERSION is an explicit
+installer override if a reviewed newer backport is selected. Never run a general
+system upgrade as part of this repair. No reboot is needed.
