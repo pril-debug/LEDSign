@@ -1,0 +1,27 @@
+; FlexClock time-only scoreboard, Network (UDP), port 2042, Single Byte.
+;;TimeOfDay
+\01T\0a%12.12s\03\04
+
+;;TimeRunning
+\01T\0a%12.12s\03\04
+
+;;TimeStopped
+\01T\0a%12.12s\03\04
+
+;;StartListHeader
+
+;;StartList
+
+;;StartListTrailer
+
+;;ResultsHeader
+
+;;Result
+
+;;ResultsTrailer
+
+;;MessageHeader
+
+;;Message
+
+;;MessageTrailer

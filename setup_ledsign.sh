@@ -7,12 +7,14 @@ echo "==> LED Sign: starting install"
 # Preserve the installed network stack. Never switch managers during installation.
 # This website supports dhcpcd + wpa_supplicant on the inspected device.
 
-# Lynx TCP port (FinishLynx Scoreboard -> Network connect)
-LYNX_PORT="${LYNX_PORT:-2001}"
+# FinishLynx scoreboard port (UDP by default)
+LYNX_PORT="${LYNX_PORT:-2042}"
 
 # -------- basics / vars --------
 if [ -z "${PI_USER:-}" ]; then
-  if id -u pi >/dev/null 2>&1; then PI_USER=pi; else PI_USER="$(whoami)"; fi
+  if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+    PI_USER="$SUDO_USER"
+  elif id -u pi >/dev/null 2>&1; then PI_USER=pi; else PI_USER="$(whoami)"; fi
 fi
 HOME_DIR="$(getent passwd "$PI_USER" | cut -d: -f6)"
 ROOT_DIR="${HOME_DIR}/sign-controller"
@@ -40,6 +42,7 @@ sudo timedatectl set-ntp true || true
 echo "==> APT deps"
 sudo apt-get update -y
 PKGS=(
+  kbd
   build-essential git curl jq
   python3 python3-venv python3-dev python3-pip
   libjpeg-dev libpng-dev libfreetype6-dev pkg-config
@@ -199,6 +202,9 @@ sudo visudo -cf "$SUDOERS_FILE"
 sudo bash "${SCRIPTS_DIR}/setup_wifi.sh"
 "${PIP}" install -r "${WEB_DIR}/requirements.txt"
 
+# The local controller socket is restricted to the dashboard's config owner.
+sudo chown "${PI_USER}:$(id -gn "${PI_USER}")" "${ROOT_DIR}/config"
+
 # -------- systemd: sign-web.service (Flask via waitress behind Nginx) --------
 echo "==> systemd: sign-web.service"
 sudo tee /etc/systemd/system/sign-web.service >/dev/null <<EOF
@@ -247,9 +253,12 @@ EOF
 
 fi
 
+sudo bash "${SCRIPTS_DIR}/setup_boot_menu.sh"
+sudo chown "${PI_USER}:${PI_USER}" "${ROOT_DIR}"
+sudo /usr/bin/python3 "${SCRIPTS_DIR}/setup_updates.py"
 sudo systemctl daemon-reload
 sudo systemctl enable --now sign-web
-echo "Controller service preserved; start it only as part of supervised hardware commissioning."
+echo "Controller boot menu enabled; it will start on the next boot."
 
 # -------- nginx reverse proxy --------
 echo "==> Nginx site"
@@ -291,4 +300,4 @@ echo "Open:   http://<Pi-IP>/  (port 80 -> Flask via Nginx)"
 echo "Login:  admin / admin (change via Web GUI)"
 echo "UI:     systemctl status sign-ui   # splash + keyboard modes"
 echo "Web:    systemctl status sign-web  # Flask (waitress)"
-echo "Ports:  80 (web), ${LYNX_PORT} (Lynx TCP)"
+echo "Ports:  80 (web), ${LYNX_PORT} (FinishLynx UDP)"

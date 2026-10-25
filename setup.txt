@@ -22,9 +22,8 @@ Werkzeug 3.1.3, Pillow 11.3.0 and Waitress 3.0.2.
 The installer updates checkouts by fast-forward only, preserves the installed
 network manager, and does not start the LED controller. Do not use the complete
 installer for a small update to an existing device.
-The previously installed sign-ui unit incorrectly launches a duplicate website.
-It was stopped with approval. Do not start it or enable a second web process on
-port 8000; controller startup repair is separate from website deployment.
+The corrected sign-ui runs only the LED controller; sign-web independently owns
+the dashboard. Never start a second website process on port 8000.
 
 Wi-Fi setup for the installed network stack
 ------------------------------------------
@@ -208,8 +207,8 @@ Fresh installer requirements:
 - sign-ui must execute venv/bin/python -m boot.splash with the repository as its
   working directory. GPIO initialization requires root. The adapter initializes GPIO as root, then drops groups, GID and UID to the
   repository owner. This keeps private home directories accessible for assets
-  and mode imports without leaving the controller running as root. A systemd session has no keyboard terminal, so splash
-  remains visible; interactive terminal sessions retain the existing mode menu.
+  and mode imports without leaving the controller running as root. The boot-menu drop-in attaches /dev/tty8 and activates that console for the
+  USB keyboard. Output goes to the journal, not to the keyboard console.
 - The installer preserves an existing sign-ui unit. For an older installation,
   review its ExecStart and User explicitly; the old run-ui.sh incorrectly started
   a second web server. The corrected script starts the controller. Do not run the
@@ -268,8 +267,244 @@ unless the documented PWM hardware modification is present. Preserve existing
 device settings during upgrades; do not infer the mapper from dimensions alone.
 
 Boot screen: sign-ui displays the customer logo (falling back to the default
-logo) above a reserved address footer. The current primary IPv4 address appears
-at bottom right without an interface label. The screen refreshes every two
-seconds while idle so an address acquired after startup appears automatically.
+logo) above the selected mode at bottom left and current IPv4 at bottom right.
+On narrow panels the footer stacks; the configured mapping duplicates content
+on both sides. Idle menu frames refresh the current address automatically.
 Device config, active panel mapping and uploaded logos remain in ignored config/;
 they persist on the Pi and must not be committed with credentials.
+
+
+USB keyboard boot menu
+----------------------
+Every controller start opens the menu with Count Up selected. Nothing launches
+until Enter. + selects the next mode; - selects the previous mode. Up/Down also
+wrap through Count Up, Count Down, Lap Counter, Round Counter,
+and FinishLynx. The selection is yellow with a leading >. Existing mode controls
+are unchanged. FinishLynx uses the existing receiver and display mapping; Escape
+returns to the menu and releases its socket. LEDSIGN_LYNX_PORT retains the service
+port (default 5010 if unset), using the receiver's existing default UDP protocol.
+Unavailable modes and launch errors show a short message; details go to the journal.
+
+setup_ledsign.sh installs kbd and invokes scripts/setup_boot_menu.sh. This narrow
+helper installs boot-menu.conf under sign-ui.service.d, enables sign-ui for boot,
+and reloads systemd. It preserves other drop-ins, settings and assets. On an
+existing installation run sudo bash scripts/setup_boot_menu.sh, then sudo systemctl
+restart sign-ui to activate now. It never restarts the dashboard or network.
+The dedicated virtual console is tty8; do not run a getty or another application
+there. chvt activates it at service start so the local USB keyboard reaches the
+existing stdin-based mode controls. SSH sessions remain independent. Switching to
+another virtual console directs keyboard input there until tty8 is selected again.
+No extra input-device permissions or root privileges after GPIO setup are needed.
+
+Verification on 2026-10-25: controller started on the real Pi with tty8 active,
+no automatic restarts, and sign-web retained its running process. Automated tests
+cover arrow bytes through a pseudo-terminal, wraparound, default idle selection,
+launch dispatch, footer/logo pixels at multiple dimensions, mirrored packing,
+and live localhost UDP receive/socket release. Dashboard tests also pass.
+No reboot, physical key presses, visual panel inspection, or external FinishLynx
+sender test was performed. A 32x16 display requires very small stacked footer
+text; confirm readability on the installed panel before using that geometry.
+
+Count Up / Count Down display
+----------------------------
+Time entry uses HH:MM:SS positions with blank underscores. The next position is
+red; typed digits are white. Type six digits (001236 means 12 minutes 36 seconds),
+use Backspace to correct, then Enter to start immediately. Blank positions count
+as zero; Escape cancels. Minute/second tens accept only 0 through 5.
+The running clock hides unused hour/minute fields and leading zeros (0, 59,
+1:00, 12:36, 1:00:00). Glyph bounds determine the largest fitting font and the
+visible clock is centered within the configured logical side. Existing mapping
+continues to duplicate that image on both sides. Enter pauses/resumes; paused
+time does not advance the timer. Countdown stops at zero.
+No installation changes or new dependencies are needed for this timer update.
+Round Counter uses the same compact, centered, automatically fitted clock as
+Count Up/Down (11, 1:00, 12:36), preserving its repeat behavior. During the final
+three seconds the border is red at 3, white at 2, and red at 1. Border thickness
+scales with the configured side dimensions (5 pixels on a 192x64 side); clock
+text fits inside the border. Its time-entry positions are also labeled HH:MM:SS.
+Lap Counter fits and centers the complete lap number using the largest font
+within the configured side, shrinking only as needed for additional digits.
+
+Round Counter: one Escape press exits directly to the main menu, without a
+paused screen or second confirmation.
+
+Manual Software Updates
+-----------------------
+The dashboard's Software Updates page uses published, stable versioned releases
+from https://github.com/pril-debug/LEDSign/releases only. Check for updates is
+manual; opening the page polls local progress only. Nothing downloads or installs
+until an administrator selects a release and confirms Install Update. Rollback
+also requires confirmation. Both operations end the current timing session.
+
+A release must attach ledsign-release.tar.gz and expose GitHub's SHA-256 asset
+digest. Source-only releases remain visible with notes but cannot be installed.
+There were no published releases when this feature was implemented. No GitHub
+release or tag is created by the installer or updater. Release notes are shown
+as escaped plain text. Drafts, prereleases and unversioned tags are excluded.
+Stable versions are compared numerically. Local untagged builds are labeled
+honestly rather than assigned a release version.
+
+Release preparation (maintainer, not a dashboard operation):
+- Review, test and commit the compatible changes in BOTH repositories separately.
+- Run venv/bin/python scripts/package_release.py v1.0.0 from a clean checkout.
+  The default artifact is /tmp/ledsign-release.tar.gz. Publish it as an asset on
+  the matching LEDSign GitHub Release tag. The script rejects dirty checkouts,
+  packages tracked application files only, and includes the website revision.
+- Package format 1 has manifest.json (format, version, controller_commit and
+  website_commit), app/ with both applications and scripts, and
+  app/requirements-update.txt containing the required application dependencies.
+  Do not include config/, venv/, .git/, customer uploads or OS installers as
+  update actions. Installer files may be distributed but are NEVER executed by
+  the updater. GPIO dependencies are retained from the device environment.
+- Keep the format-1 worker CLI, state files, health/version response and update
+  routes compatible so the previous release can recover a failed installation.
+  Each packaged application must retain this update capability.
+
+Fresh setup_ledsign.sh calls scripts/setup_updates.py. To add this system to an
+existing Pi without OS/network provisioning, run:
+  sudo /usr/bin/python3 scripts/setup_updates.py
+  sudo systemctl restart sign-ui sign-web
+Do not run the full setup_ledsign.sh just to add updates to an existing device.
+The narrow setup snapshots the current working controller, website and virtualenv
+as the initial known-good version without resetting either Git checkout. It
+installs root-owned update code and a no-arguments-only sudo rule. Both service
+drop-ins then run /opt/flexclock/current with the release's own virtualenv.
+The GPIO renderer uses LEDSIGN_DEVICE_USER to drop to the device user after GPIO
+setup even though managed application files belong to root. Configuration remains
+a symlink to the original checkout's config/ directory. Absolute logo paths and
+the display helper's existing active-mapping path are retained. Repository edits
+after this migration do not change the running snapshot; use reviewed releases
+for subsequent deployment. Setup does not replace an existing managed version.
+
+The worker is independent of Flask under flexclock-update.service. Its state,
+progress and history live in /var/lib/flexclock-updates and are readable by the
+dashboard but writable only by root. A queued job survives the dashboard restart.
+No update service is enabled on a schedule. The recovery unit runs at boot solely
+to restore a transaction interrupted by power loss; it does not check or install
+new releases. ExecStopPost also recovers a worker crash or timeout.
+
+Installation downloads the selected release asset over HTTPS, checks its digest,
+rejects traversal/link/device-data archive entries, and stages a separate copy of
+the current virtualenv. It installs only the release's Python application
+requirements, checks dependencies/imports/updater syntax, then atomically switches
+the current symlink. Only sign-ui and sign-web restart. Root-owned application
+helpers and the shared display validator follow the selected application version;
+network configuration files and network services are untouched. The new updater
+replaces the privileged entrypoint only after application verification succeeds,
+so the running worker can finish updating itself. No apt, OS upgrades, network
+manager changes, reboot, or full installer execution occur in an update.
+
+Verification requires both services to stay active with stable process IDs for
+five seconds and the local dashboard /health to report the selected VERSION.
+On failure after switching, the worker restores the prior code, dependencies and
+helpers, restarts both services, and verifies recovery. An unrecoverable failure
+is reported as an error with its transaction retained for installer recovery;
+it is never reported as success. The dashboard shows short status messages;
+full command output and traces belong only in the service journal.
+
+After success exactly the active application and one previous known-good version
+are retained locally. Rollback swaps these complete versions without GitHub or
+pip access, so it works offline. Passwords, secrets, logos, network settings and
+active panel mappings stay in their original locations throughout. History
+records UTC timestamps, old/new versions, action, result and a plain-English
+message; the browser displays timestamps in the viewer's local time zone.
+
+Tests:
+  venv/bin/python -m unittest discover -s tests -v
+  venv/bin/python -m unittest discover -s web/tests -v
+  bash -n setup_ledsign.sh
+Tests use temporary release/config directories, real archive extraction and
+symlink switches, mocked service/dependency operations, digest checks, import
+checks, auth/CSRF validation, version comparison, progress and history rendering.
+Production releases and a physical power-loss/reboot cycle must be tested with
+published release artifacts; do not label temporary fixtures as real releases.
+
+FinishLynx clock integration (UDP 2042)
+Select FinishLynx in the device boot menu to start the receiver. No network restart
+is needed. LEDSIGN_LYNX_PORT can override port 2042; existing explicit overrides
+are preserved. For TCP, run modes/Lynx_receiver.py with --tcp --port 2042.
+Download FlexClock.lss from the FinishLynx page, copy it into the FinishLynx
+script directory, and select it in Scoreboard > Options. Use Single Byte,
+Network (UDP), the clock's reachable IP address, port 2042, Running Time Normal,
+and Results Auto. Enable Running Time Options > Send results if armed to send
+the loaded event name. Restart FinishLynx after adding the script. Turn off Show
+time of day for race timing. Use Refresh All (Alt-E) if the event name is absent.
+The sign displays received data and never advances FinishLynx time itself.
+Use the page's Use FinishLynx mode button to activate the clock receiver.
+FlexClock.lss is the recommended multi-function script. FlexClock-TOD.lss is a
+legacy time-only alternative; FlexSign.lss is a different legacy format. Neither
+is the recommended dashboard download. Release packaging includes FlexClock.lss.
+UDP connection status expires after 5 seconds without a recognized frame.
+The dashboard treats receiver reports older than 4 seconds as stopped.
+Existing LEDSIGN_LYNX_PORT overrides are preserved; the default is 2042.
+
+Software Updates verification on this Pi (2026-10-25): both managed application
+services passed the stable-process and exact-version health checks. Authenticated
+HTTP checks rendered the update controls and status; a live GitHub check returned
+zero published stable releases. The worker/recovery service completed a no-job
+smoke test successfully. All existing config, credentials, uploaded logos, active
+mapping and network configuration files matched the private pre-deployment hashes.
+Tests passed: 39 controller tests and 67 website tests, including fixture-based
+successful/failed installs and offline rollback. The final updater changes also
+passed its 12 targeted tests and system-Python self-check. Release workers must
+retain the self-check CLI in addition to worker/recover. No published-package
+installation, power-loss/reboot recovery, or interactive browser viewport testing
+was performed. Source repositories and other pending edits were preserved.
+
+FinishLynx correction: use the user's original multi-function script, saved as
+FlexClock.lss and offered by the dashboard download. FlexClock-TOD.lss is retained
+for compatibility only. LSS field selectors such as \01 are not transmitted SOH
+bytes: live packets may start directly with T followed by LF. Frames terminate
+at ETX, with EOT/NUL padding ignored. Result rows use 3-character place,
+30-character name, and 10-character mark, with no newline after the mark.
+Receiver supports time, result batches, start-list headers, and messages. The
+provided StartList section is empty, so it cannot transmit athlete start lists.
+The original Lynx logo is packaged for the idle screen, with Waiting.... or
+Connected centered below it. UDP presence is refreshed by any recognized frame.
+
+Live event and clock: use the original FlexClock.lss (not FlexClock-TOD.lss),
+Running Time Normal, Results Auto. Enable Running Time Options > Send results if
+armed to transmit the event/start-list header when an event opens. If necessary,
+use Scoreboard > Refresh All (Alt-E). Turn off Show time of day for race timing.
+The received S/R header supplies the event name. Clock updates retain that name;
+a different event header clears the previous clock until a new time arrives.
+Both the sign and dashboard show the event above its live clock. The dashboard
+polls every half-second. No event name is inferred from clock-only packets.
+Reference: https://help.finishlynx.com/Content/OnlineManual/ScoreboardOptions.htm
+
+FinishLynx event-frame correction: the observed multi-function script sends
+S LF Testy LF EOT followed by NUL padding, without ETX. Both ETX and EOT now
+terminate frames. Loaded events and last received clocks remain visible while
+UDP is idle; connection status continues to expire independently. The live
+clock uses DejaVu Sans Bold with plain, tabular zeros, centered text, and a
+fixed scale for each time format instead of reserved unused clock columns.
+
+Dashboard mode controls
+The controller opens config/controller.sock (local Unix socket, mode 0600,
+owned by the config directory owner used by sign-web). The dashboard and
+controller must be updated together. No network listener or extra service is
+needed. Select mode opens the existing LED keyboard entry; Set time and start
+feeds HHMMSS and Enter through the same input collector. Keyboard controls stay
+available. Restart sign-ui and sign-web after installing the updated code.
+
+Clock Control dashboard
+Set time and Start are separate dashboard actions for Count Up, Count Down and
+Round Counter. Setting a time leaves the clock stopped. Keyboard time entry
+continues to start on Enter. Lap Counter supports plus, minus and a manual
+number (0–999999). The dashboard reads status and a PNG of the actual logical
+LED frame over the local controller socket; disconnected previews are hidden.
+FinishLynx has its own navigation page. Updates and activity are under Settings.
+Install modes/matrix_utils.py with the controller and web changes so every mode,
+including FinishLynx and keyboard entry, supplies the live preview.
+
+Dashboard page organization
+Display now shows only the live clock preview. Panel mapping endpoints remain
+available for installer tooling; the old editor is no longer shown on Display.
+Saved logos and uploads are on Settings, and logo actions return to Settings.
+The FinishLynx page activates its mode and provides the recommended FlexClock.lss.
+
+Settings cleanup
+Saved logos and uploading share one full-width Clock logo section in Settings.
+Software updates uses a full-width settings row. Display navigation and its
+standalone preview page were removed; /display redirects to /dashboard.
+The authenticated /display/settings installer API is retained for compatibility.

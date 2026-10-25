@@ -1,75 +1,91 @@
-# /sign-controller/modes/menu.py
-import time, sys, termios, tty, select
-from PIL import Image, ImageDraw
-from .matrix_utils import load_font, push
+"""Boot selection and dispatch; operating modes retain their own controls."""
+import logging
+import os
+import select
+import sys
+import termios
+import time
+import tty
 
-MENU = ["FinishLynx", "Clock Up", "Clock Down", "Lap Count", "Rounds"]
+from .matrix_utils import get_primary_ip, push
+from . import control
 
-def getch(timeout=0.05):
-    dr,dw,de = select.select([sys.stdin], [], [], timeout)
-    if not dr: return None
-    return sys.stdin.read(1)
+MENU = ['Count Up', 'Count Down', 'Lap Counter', 'Round Counter', 'FinishLynx']
+
+
+def getch(timeout=0.12):
+    key = control.read_key(timeout)
+    if key == '\x1b':
+        tail = ''
+        for _ in range(2):
+            if select.select([sys.stdin], [], [], 0.05)[0]:
+                tail += os.read(sys.stdin.fileno(), 1).decode(errors='ignore')
+            else:
+                break
+        return {'[A': 'up', 'OA': 'up', '[B': 'down', 'OB': 'down'}.get(tail)
+    return key
+
+
+def launch_mode(matrix, index):
+    control.report(mode=MENU[index], phase="entry")
+    if index in (0, 1):
+        from .timer_modes import run_clock, DIR_UP, DIR_DOWN
+        run_clock(matrix, direction=DIR_UP if index == 0 else DIR_DOWN)
+    elif index == 2:
+        from .lap_counter import run_lap_counter
+        run_lap_counter(matrix)
+    elif index == 3:
+        from .rounds import run_rounds
+        run_rounds(matrix)
+    elif index == 4:
+        from .Lynx_receiver import main
+        main([], matrix=matrix)
+    else:
+        raise NotImplementedError
+
 
 def run_menu(matrix):
-    # prepare raw terminal
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    tty.setcbreak(fd)
+    from boot.splash import boot_frame
+    control.start()
+    fd = sys.stdin.fileno() if sys.stdin.isatty() else None
+    old = termios.tcgetattr(fd) if fd is not None else None
+    if fd is not None:
+        tty.setcbreak(fd)
+    index = 0
+    message = None
     try:
-        idx = 0
-        small = load_font(14)
-        title = load_font(16)
         while True:
-            img = Image.new("RGB", (matrix.width, matrix.height), (0,0,0))
-            draw = ImageDraw.Draw(img)
-            # Title
-            draw.text((4, 2), "Select Mode", font=title, fill=(255,255,255))
-            # Items
-            y = 22
-            for i, item in enumerate(MENU):
-                prefix = "> " if i == idx else "  "
-                draw.text((8, y), prefix + item, font=small, fill=(255,255,255))
-                if i == idx:
-                    w = draw.textlength(prefix + item, font=small)
-                    draw.line((8, y+small.size+1, 8+w, y+small.size+1), fill=(255,255,255), width=1)
-                y += small.size + 6
-
-            push(matrix, img)
-
-            c = getch(0.12)
-            if not c:
-                continue
-            if c in ("\x1b",):  # ESC → could exit or ignore here
-                # Ignore at menu
-                pass
-            elif c in ('w','W') or ord(c)==65:  # up (W or ANSI up)
-                idx = (idx - 1) % len(MENU)
-            elif c in ('s','S') or ord(c)==66:  # down (S or ANSI down)
-                idx = (idx + 1) % len(MENU)
-            elif c in ('\r','\n'):  # Enter
-                sel = MENU[idx]
-                if sel == "Clock Up":
-                    from .timer_modes import run_clock, DIR_UP
-                    run_clock(matrix, direction=DIR_UP)
-                elif sel == "Clock Down":
-                    from .timer_modes import run_clock, DIR_DOWN
-                    run_clock(matrix, direction=DIR_DOWN)
-                elif sel == "Lap Count":
-                    from .lap_counter import run_lap_counter
-                    run_lap_counter(matrix)
-                elif sel == "FinishLynx":
-                    # placeholder until we wire your Lynx receiver
-                    from PIL import ImageFont
-                    img = Image.new("RGB", (matrix.width, matrix.height), (0,0,0))
-                    f = load_font(16)
-                    ImageDraw.Draw(img).text((10, 20), "FinishLynx mode\n(coming next)", font=f, fill=(255,255,255))
-                    push(matrix, img); time.sleep(1.2)
-                elif sel == "Rounds":
-                    from .rounds import run_rounds
-                    run_rounds(matrix)
-            # Consume ANSI escape sequences for arrows if needed
-            elif c == '\x1b':
-                # read rest of escape if present
-                _ = sys.stdin.read(2) if select.select([sys.stdin], [], [], 0)[0] else None
+            control.report(mode="Menu", phase="menu")
+            _, ip = get_primary_ip()
+            push(matrix, boot_frame(matrix, ip, MENU[index], message))
+            try:
+                key = getch()
+                if key in ('up', '-', 'w', 'W'):
+                    index = (index - 1) % len(MENU)
+                    message = None
+                elif key in ('down', '+', 's', 'S'):
+                    index = (index + 1) % len(MENU)
+                    message = None
+                elif key in ('\r', '\n'):
+                    launch_mode(matrix, index)
+                    message = None
+            except control.SelectMode as selection:
+                while True:
+                    index = control.apply_selection(selection)
+                    try:
+                        launch_mode(matrix, index)
+                        message = None
+                        break
+                    except control.SelectMode as next_selection:
+                        selection = next_selection
+                    except Exception:
+                        control.ready(error='Unable to start mode.')
+                        logging.exception('Selected mode failed')
+                        message = 'Unable to start mode'
+                        break
+            except Exception:
+                logging.exception('Selected mode failed')
+                message = 'Unable to start mode'
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        if old is not None:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)

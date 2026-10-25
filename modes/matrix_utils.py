@@ -49,7 +49,8 @@ class MappedMatrix:
         options.hardware_mapping = conf.get('led_hardware_mapping', 'regular')
         # Initialize GPIO as root, then run rendering as the repository owner.
         # The driver's default daemon user cannot traverse a private home folder.
-        owner = pwd.getpwuid(APP_ROOT.stat().st_uid)
+        owner = (pwd.getpwnam(os.environ["LEDSIGN_DEVICE_USER"]) if os.environ.get("LEDSIGN_DEVICE_USER")
+                 else pwd.getpwuid(APP_ROOT.stat().st_uid))
         options.drop_privileges = False
         self.matrix = RGBMatrix(options=options)
         if os.getuid() == 0 and owner.pw_uid != 0:
@@ -62,6 +63,8 @@ class MappedMatrix:
         if image.size != (self.width, self.height):
             raise ValueError('Frame does not match the configured logical display size')
         self.matrix.SetImage(pack_image(image, self.layout, time.time() < self.test_until))
+        from modes.control import capture_frame
+        capture_frame(image)
 
 
 def build_matrix(conf=None):

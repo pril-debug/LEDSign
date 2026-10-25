@@ -1,0 +1,42 @@
+; FlexClock recommended FinishLynx scoreboard script.
+; Network (UDP), port 2042, Single Byte.
+; Running Time Normal, Results Auto; enable Send results if armed.
+; Supports event headers, live time, results and messages.
+
+;;TimeOfDay
+\01\=0T\0a%12.12s\B4\I4\R0\03\04
+
+;;TimeRunning
+\01T\0a%12.12s\03\04
+;\01\=0T\0a%12.12s\03\04
+
+;;TimeStopped
+\01T\0a%12.12s\03\04
+
+;;StartListHeader
+\02S\0a%s\0a
+
+;;StartList
+
+;;StartListTrailer
+\03\04
+
+;;ResultsHeader
+\02R\0a%s\0a
+
+;;Result
+\01%-3.3s\0a
+\04%-30.30s\0a
+\06%-10.10s
+
+;;ResultsTrailer
+\03\04
+
+;;MessageHeader
+\00M\0a
+
+;;Message
+\01%s\0a
+
+;;MessageTrailer
+\03\04

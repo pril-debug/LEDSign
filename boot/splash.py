@@ -33,24 +33,53 @@ def show_splash(matrix, seconds=3):
     push(matrix, bg)
     time.sleep(seconds)
 
-def boot_frame(matrix, ip):
+def boot_frame(matrix, ip, mode="Count Up", message=None):
     bg = Image.new("RGB", (matrix.width, matrix.height), (0, 0, 0))
     draw = ImageDraw.Draw(bg)
-    label = ip or "No network"
-    font = load_font(10)
-    while getattr(font, "size", 6) > 6 and draw.textbbox((0, 0), label, font=font)[2] > matrix.width - 4:
+    labels = ["> " + mode, ip or "No network"]
+    # Prefer a single footer row; small panels stack the two corner labels.
+    font = load_font(min(12, max(6, matrix.height // 6)))
+    def bounds(text):
+        return draw.textbbox((0, 0), text, font=font)
+    while getattr(font, "size", 6) > 6 and max(bounds(t)[2] for t in labels) > matrix.width - 4:
         font = load_font(font.size - 1)
-    left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
-    text_height = bottom - top
-    logo_area_height = max(1, matrix.height - text_height - 6)
+    boxes = [bounds(t) for t in labels]
+    row_height = max(b[3]-b[1] for b in boxes) + 2
+    stacked = sum(b[2]-b[0] for b in boxes) + 8 > matrix.width
+    while stacked and 2 * row_height + 2 >= matrix.height and getattr(font, "size", 4) > 4:
+        font = load_font(font.size - 1)
+        boxes = [bounds(t) for t in labels]
+        row_height = max(b[3]-b[1] for b in boxes) + 1
+    footer_height = row_height * (2 if stacked else 1) + 2
+    logo_area_height = max(1, matrix.height - footer_height)
     logo_path = find_logo()
     if logo_path:
-        with Image.open(logo_path) as source:
-            logo = scale_to_fit(source.convert("RGBA"), matrix.width - 8, logo_area_height)
-        bg.paste(logo, ((matrix.width - logo.width)//2,
-                       (logo_area_height - logo.height)//2), logo)
-    draw.text((matrix.width - 2 - right, matrix.height - 2 - bottom),
-              label, font=font, fill="white")
+        try:
+            with Image.open(logo_path) as source:
+                logo = scale_to_fit(source.convert("RGBA"), max(1, matrix.width - 4), logo_area_height)
+            bg.paste(logo, ((matrix.width - logo.width)//2,
+                           (logo_area_height - logo.height)//2), logo)
+        except OSError:
+            pass  # A damaged upload must not disable keyboard selection.
+    for i, (label, box) in enumerate(zip(labels, boxes)):
+        left, top, right, bottom = box
+        x = 2 - left if i == 0 else matrix.width - 2 - right
+        y = matrix.height - 2 - bottom - (row_height if stacked and i == 0 else 0)
+        # Even the smallest supported panels retain the complete labels.
+        tile = Image.new("RGB", (max(1, right-left), max(1, bottom-top)))
+        ImageDraw.Draw(tile).text((-left, -top), label, font=font,
+                                 fill="yellow" if i == 0 else "white")
+        if tile.width > matrix.width - 4:
+            tile = tile.resize((matrix.width - 4, tile.height))
+            x = 2
+        bg.paste(tile, (x, y + top))
+    if message:
+        # Error replaces only the logo area, leaving selection and address visible.
+        draw.rectangle((0, 0, matrix.width-1, logo_area_height-1), fill="black")
+        error = Image.new("RGB", (max(1, int(draw.textlength(message, font=font))), row_height))
+        ImageDraw.Draw(error).text((0, -bounds(message)[1]), message, font=font, fill="red")
+        error.thumbnail((matrix.width, logo_area_height))
+        bg.paste(error, ((matrix.width-error.width)//2, (logo_area_height-error.height)//2))
     return bg
 
 
@@ -61,17 +90,6 @@ def show_ip(matrix):
 
 def main():
     m = build_matrix()
-    show_ip(m)
-
-    # systemd has no keyboard terminal; keep the last frame displayed.
-    if not sys.stdin.isatty():
-        while True:
-            time.sleep(2)
-            _, ip = get_primary_ip()
-            push(m, boot_frame(m, ip))
-        return
-
-    # Jump to menu
     from modes.menu import run_menu
     run_menu(m)
 

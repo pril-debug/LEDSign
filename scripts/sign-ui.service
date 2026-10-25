@@ -5,9 +5,16 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=%i
+User=root
 WorkingDirectory=/home/%i/sign-controller
-ExecStart=/home/%i/sign-controller/venv/bin/python boot/splash.py
+ExecStart=/home/%i/sign-controller/venv/bin/python -m boot.splash
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+TTYPath=/dev/tty8
+TTYReset=yes
+TTYVHangup=yes
+ExecStartPre=+/usr/bin/chvt 8
 Restart=always
 Environment=PYTHONUNBUFFERED=1
 

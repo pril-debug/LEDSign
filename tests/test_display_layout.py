@@ -116,8 +116,8 @@ class ModeRenderingTests(unittest.TestCase):
         with patch.object(laps, '_getch', return_value='\x1b'):
             laps.run_lap_counter(matrix)
         self.assertEqual(matrix.SetImage.call_args.args[0].size,(192,64))
-        with patch.object(rounds, '_getch', return_value='\x1b'):
-            rounds._pause_screen(matrix)
+        with patch.object(rounds, '_getch', return_value='\x1b'), patch.object(rounds, 'collect_hhmmss', return_value=10):
+            rounds.run_rounds(matrix)
         self.assertEqual(matrix.SetImage.call_args.args[0].size,(192,64))
         timer.draw_time(matrix,123)
         self.assertEqual(matrix.SetImage.call_args.args[0].size,(192,64))
