@@ -1,0 +1,134 @@
+FlexClock website installation and supervised verification
+========================================================
+Scope: Flask configuration website only. Do not run the installer against a live
+race sign without reviewing its package, nginx and service changes. It was NOT run
+as part of this redesign. No live network changes or service restarts were made.
+
+Repository ownership
+--------------------
+LEDSign owns setup_ledsign.sh and scripts/web_network.py. web/ is an independent
+LEDSign_Site Git repository, not tracked content of LEDSign. Ship BOTH changesets.
+The installer clones/fast-forwards LEDSign_Site; publish the reviewed web changes
+there before using it on a fresh image. Do not reset either repository. Existing
+settings.json and uploaded logos remain untouched. Commit and record the exact
+reviewed revisions of both repositories for a release; mutable main is not a
+reproducible version pin. No release was published by this task.
+
+Fresh image
+-----------
+Use Raspberry Pi OS with dhcpcd + wpa_supplicant for this backend. Bookworm images
+using NetworkManager require a separately reviewed manager migration or a future
+NM backend. The installer deliberately does not switch or stop network managers.
+Install/configure dhcpcd on a fresh image only if that stack is intended. Establish
+Ethernet and correct Wi-Fi regulatory country using OS provisioning first.
+The website never restricts frequency. WPA/WPA2 Personal and open networks are
+supported; WPA3-only/enterprise require OS setup. Python requirements remain in
+web/requirements.txt. The setup script installs them and a root-owned helper.
+Run the installer only after both reviewed repository revisions are available.
+It preserves an existing controller unit and does not start the controller.
+The legacy sign-ui/run-ui.sh mismatch needs a separate controller owner decision.
+
+Existing device deployment (not executed)
+-----------------------------------------
+First back up config/ and both checkouts securely. Keep backups of credentials
+outside version control. Install from these reviewed local files:
+
+cd /home/admin/sign-controller
+venv/bin/pip install -r web/requirements.txt
+sudo install -d -m 0755 /usr/local/libexec/flexclock
+sudo install -o root -g root -m 0755 scripts/web_network.py /usr/local/libexec/flexclock/web_network.py
+
+Replace the old broad sudoers rule (after review), using sudo visudo -f
+/etc/sudoers.d/sign-controller-web. Exact content for this device:
+admin ALL=(root) NOPASSWD: /usr/local/libexec/flexclock/web_network.py scan, /usr/local/libexec/flexclock/web_network.py wifi, /usr/local/libexec/flexclock/web_network.py ethernet
+
+sudo visudo -cf /etc/sudoers.d/sign-controller-web
+sudo systemctl restart sign-web
+
+That last command deploys the website and requires a planned service restart;
+it has not been executed. Do not restart sign-ui or any network service.
+The website creates config/.web-secret (0600) on first import. Preserve it across
+worker/service restarts; exclude it from version control. SC_SECRET may override
+it. Use TLS at nginx on untrusted networks; set SESSION_COOKIE_SECURE when TLS
+is enabled. Sessions expire after eight hours; password changes invalidate all
+sessions. The existing username/hash is retained. New passwords need 12 characters.
+
+Read-only commissioning checks
+-----------------------------
+systemctl is-active NetworkManager dhcpcd wpa_supplicant
+systemctl show sign-web sign-ui -p ActiveState -p ExecStart
+ip -j address
+ip route show
+wpa_cli -i wlan0 ping
+wpa_cli -i wlan0 status
+ss -lntu
+
+On the inspected device: dhcpcd and wpa_supplicant active, NetworkManager inactive;
+eth0 had a DHCP address, wlan0 had no address, and wpa_cli ping could not find the
+wlan0 control socket. Do not enable writes until the socket is fixed through
+supervised OS configuration. A generic active wpa_supplicant service is NOT proof
+it manages wlan0. Confirm its unit invocation, config location, ctrl_interface,
+update_config=1 and write permissions. Do not overwrite saved network blocks or
+start competing instances. Any necessary service operation needs prior approval.
+
+Wi-Fi test approval and exact command plan
+-----------------------------------------
+The network helper refuses writes unless root has explicitly commissioned it:
+  sudo touch /etc/flexclock-network-enabled
+Do not execute this now. Approval is needed first, along with resolving the
+missing socket. Scan is separate: sudo -n /usr/local/libexec/flexclock/web_network.py scan
+executes iw dev wlan0 scan. The scan was NOT run by this task.
+
+The website calls the root-owned helper with JSON via stdin. For connect:
+  wpa_cli -i wlan0 ping
+  wpa_cli -i wlan0 add_network                  # returns ID
+  wpa_cli -i wlan0 set_network ID ssid HEX_SSID
+  wpa_cli -i wlan0 set_network ID scan_ssid 1
+  wpa_cli -i wlan0 set_network ID key_mgmt WPA-PSK  # NONE for open
+  wpa_cli -i wlan0 set_network ID psk DERIVED_KEY   # omitted for open
+  wpa_cli -i wlan0 select_network ID
+  wpa_cli -i wlan0 status                      # poll up to 20 seconds
+  wpa_cli -i wlan0 save_config                 # after matching COMPLETED + ID
+  ip -4 -o addr show dev wlan0
+Failure cleanup: wpa_cli -i wlan0 remove_network ID; wpa_cli -i wlan0 reconfigure.
+Disconnect: wpa_cli -i wlan0 disable_network all; save_config; disconnect.
+All commands target wlan0. No eth0 flush, manager switch or global restart.
+The passphrase is delivered over stdin and converted to a derived key, never
+included verbatim in a process argument or log. Derived keys are still secrets.
+Saved profiles accumulate when switching; profile deletion/dedup is future work.
+
+With Ethernet continuously monitored from another terminal, approve and test a
+known WPA2 network, an incorrect password, an open network and a hidden SSID.
+Compare eth0 addresses/routes before and after. Verify association using wpa_cli
+and verify assigned IPv4 separately with ip. Verify reachability over each
+interface from another machine. Saving a profile alone does not establish reboot
+persistence. Schedule an explicitly approved reboot separately and repeat checks.
+Do not reboot as part of automated tests. Lock again after testing:
+  sudo rm /etc/flexclock-network-enabled
+
+Ethernet verification (mocked first; NO live test performed)
+----------------------------------------------------------
+Review DHCP/static values in the Network form and its confirmation. The helper
+validates IPv4, subnet, gateway and DNS, backs up /etc/dhcpcd.conf to
+/etc/dhcpcd.conf.flexclock-backup, replaces only the LEDSign eth0 tagged block,
+and executes: dhcpcd -n eth0
+It rejects unmanaged interface eth0/profile declarations. No manager restart.
+A rebind request is not proof of DHCP success. Do not exercise on the live device
+during automated tests. For a future approved static test reconnect at the new
+IP. For DHCP obtain the address from the router. Keep console access for manual
+recovery. A failed rebind may leave the saved config changed; inspect the backup
+before an approved restore/rebind. Each apply replaces the prior backup.
+
+Safe automated verification
+---------------------------
+cd /home/admin/sign-controller
+venv/bin/python -m unittest discover -s web/tests -v
+bash -n setup_ledsign.sh scripts/apply_wifi.sh scripts/apply_network.sh scripts/wifi_scan.sh
+venv/bin/python -m py_compile web/app.py web/device.py scripts/web_network.py
+
+Tests use temporary settings/logos and mocked disruptive operations. Do not use
+real credentials or network mutations. Browser visual verification at desktop,
+tablet and phone widths is still required; no browser automation is installed on
+this Pi. Check keyboard focus, scan selection, confirmation dialogs, error states
+and loading feedback. Test current logo visibility on the actual LED separately;
+web image rendering does not prove controller consumption.

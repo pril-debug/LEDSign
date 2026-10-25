@@ -1,0 +1,87 @@
+FlexClock website implementation report — 2026-10-25
+===================================================
+Existing problems
+- Dashboard combined unrelated forms; dark/inconsistent presentation; default
+  credentials advertised; no CSRF, sessions invalidated on restart, no session
+  invalidation on password change; image extensions trusted without decoding.
+- Wi-Fi helper overwrote all profiles, interpolated unescaped credentials, stopped
+  NetworkManager and restarted dhcpcd. Scan parser assumed blank lines between BSS
+  records. Ethernet helper deleted NM profiles and globally restarted dhcpcd.
+- Installer regenerated unsafe helpers, reset repositories and switched managers.
+- No website/controller command channel, telemetry or receiver configuration API.
+- Existing sign-ui service invokes scripts/run-ui.sh, which launches Flask instead
+  of the splash/menu. Read-only observation showed sign-ui activating/restarting.
+  Controller scripts and pre-existing edits were preserved, not repaired here.
+
+Changes / architecture
+web/app.py: retained Flask, separated four primary pages; public landing; protected
+logos/status; CSRF; stable secret; 8-hour sessions and password-version checks;
+validated image decode/PNG normalization; network confirmation and validation.
+web/device.py: bounded read-only subprocess observations; explicit unknowns.
+web/templates/{base,landing,login,dashboard,display,network,settings,error}.html:
+white responsive shared design, restrained blue, gray surfaces, cards, typography,
+keyboard focus, notices, semantic forms; no simulated operational status.
+web/static/{style.css,app.js}: shared responsive design, scanned SSID selection,
+confirmation dialogs and submitting states. No new frontend framework/CDN.
+scripts/web_network.py: root-owned installation, narrow sudo interface; active
+stack guard, wpa_supplicant wlan0-only profile management, saved configuration,
+association check distinct from DHCP. Writes locked pending commissioning.
+Legacy scripts apply_wifi.sh/apply_network.sh/wifi_scan.sh: retire unsafe paths.
+setup_ledsign.sh/setup.txt: preserve network stack/config/assets; root-owned helper;
+narrow sudoers; pin Python requirements; ff-only repository update; no controller
+startup; retain existing controller unit. Installer NOT executed.
+web/tests/test_web.py: isolated Flask and mocked network tests.
+.gitignore/web/.gitignore: exclude secret and generated runtime files.
+
+Function verification matrix
+Function                         State / evidence / remaining work
+Correct/incorrect login          Implemented; automated test with temporary auth
+Logout, protected pages, CSRF    Implemented; automated
+Sessions/password changes        Implemented; automated invalidation + persistence
+Logo upload/validation/removal    Implemented; automated JPEG->PNG, invalid rejection
+Logo on physical sign            Requires Pi test; web save does not activate it
+Dashboard/service/network data   Implemented; route tests + unknown-state fallback
+                                 Read-only Pi observations; browser review remains
+Ethernet validation/confirmation Implemented; mocked endpoint and file/backend tests
+Ethernet DHCP/static application Requires supervised Pi test; no live apply
+Wi-Fi scan parsing and failures  Implemented; mocked tests, including 2.4/5 GHz
+Live scan                        Not executed; deployed root helper needed
+Wi-Fi connect/failure/disconnect Implemented; mocked association, cleanup, persistence
+Hidden/open networks             Implemented paths; live hardware test outstanding
+Wi-Fi DHCP/reboot persistence    Unverified; no live association or reboot
+Actual wlan0 control interface   Broken/unavailable on inspected system; OS repair
+Display mode/Show Logo/Test      Missing web integration; explicitly disclosed
+Physical display/preview         Unknown; no controller telemetry
+FinishLynx settings/feed         Missing web integration; no fabricated listener
+Service restart/update buttons   Not supplied: no existing safe integration
+Responsive/browser behavior      CSS implemented; no browser tooling installed;
+                                 desktop/tablet/mobile visual testing outstanding
+
+Test results
+17 unittest tests PASS. Shell syntax checks PASS. Python compilation PASS.
+Disruptive helpers were mocked; temporary configuration and images used. No live
+network changes, scan, reboot, package installation, sudoers edit, service restart
+or physical LED operation occurred. Running sign-web was not restarted, so these
+source changes have not been deployed to the already running process.
+
+Pi findings / deployment decisions
+Debian 12, actual Pi interface names eth0/wlan0. dhcpcd + wpa_supplicant active;
+NetworkManager installed but inactive. eth0 observed UP with DHCP IPv4; wlan0 no
+address. wpa_cli ping failed: no wlan0 control socket. Resolve via supervised OS
+configuration before enabling writes. Preserve Ethernet throughout testing.
+web/ has its own Git remote LEDSign_Site. Review/publish web changes there and
+installer/helper changes in LEDSign together. No commits, push or deployment made.
+Release revision pinning is still needed; installer currently follows main.
+
+Remaining decisions
+1. Approve a website deployment restart and root helper/sudoers installation.
+2. Approve specific wlan0 commissioning commands after inspecting its service
+   invocation/configuration. No global manager restart is proposed here.
+3. Assign controller API/telemetry design and sign-ui launch repair separately;
+   choose desired receiver protocol/port (requested TCP 2001 is not live proof).
+4. Schedule supervised association, DHCP, persistence and physical display tests.
+5. If using a new NetworkManager-based image, implement its backend or commission
+   dhcpcd intentionally; never silently change the installed manager.
+
+Exact deployment, inspection, Wi-Fi operations, Ethernet rebind and recovery
+procedures are in setup.txt. Review and approve them before live changes.

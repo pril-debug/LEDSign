@@ -1,0 +1,9 @@
+venv/
+config/.web-secret
+__pycache__/
+*.pyc
+# Device-specific configuration, credentials and uploaded assets
+config/
+# Separate checkouts, not content of this repository
+ledlib/
+web/
