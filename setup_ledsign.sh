@@ -94,6 +94,16 @@ if [ ! -d "${ROOT_DIR}/ledlib" ]; then
   fi
 fi
 
+# HUB75 PWM conflicts with the Pi built-in analog audio driver.
+# Prepare boot persistence; no reboot or runtime audio/network restart here.
+BOOT_CONFIG=/boot/firmware/config.txt
+[ -f "$BOOT_CONFIG" ] || BOOT_CONFIG=/boot/config.txt
+if [ -f "$BOOT_CONFIG" ]; then
+  sudo cp -an "$BOOT_CONFIG" "${BOOT_CONFIG}.before-led-display"
+  sudo sed -i 's/^dtparam=audio=on$/dtparam=audio=off/' "$BOOT_CONFIG"
+fi
+printf '%s\n' '# HUB75 requires the PWM peripheral used by built-in analog audio.' 'blacklist snd_bcm2835' | sudo tee /etc/modprobe.d/flexclock-led-audio.conf >/dev/null
+
 # -------- python venv --------
 if [ ! -d "${ROOT_DIR}/venv" ]; then
   echo "==> Python venv + packages"
@@ -101,7 +111,11 @@ if [ ! -d "${ROOT_DIR}/venv" ]; then
 fi
 "${PIP}" install --upgrade pip wheel
 # base deps for the web ui and common utils
-"${PIP}" install flask waitress pillow werkzeug
+"${PIP}" install flask waitress pillow werkzeug setuptools
+# Install the same driver into the interpreter used by sign-ui.
+make -C "${ROOT_DIR}/ledlib/lib"
+make -C "${ROOT_DIR}/ledlib/bindings/python"
+"${PIP}" install --no-build-isolation "${ROOT_DIR}/ledlib/bindings/python"
 
 # -------- clone/update web repo (LEDSign_Site) -> ${WEB_DIR} --------
 if [ ! -d "${WEB_DIR}/.git" ]; then
@@ -136,12 +150,25 @@ PY
   "led_brightness": 80,
   "led_gpio_slowdown": 2,
   "led_hardware_mapping": "regular",
+  "led_multiplexing": 0,
   "logo_path": "/home/${PI_USER}/sign-controller/config/Logo-White.png",
   "customer_logo_path": "/home/${PI_USER}/sign-controller/config/customer_logo.png",
   "web_port": 8000,
   "auth": { "username": "admin", "password_hash": "${ADMIN_HASH}" }
 }
 JSON
+  # New installations start with the supplied 12-panel geometry; existing devices are untouched.
+  "${ROOT_DIR}/venv/bin/python" - "${SETTINGS_JSON}" "${ROOT_DIR}" <<'PYLAYOUT'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+from display_layout import default_layout
+path = Path(sys.argv[1])
+conf = json.loads(path.read_text())
+conf['display_layout'] = default_layout()
+conf.update(led_rows=32, led_cols=64, led_chain=12, led_parallel=1)
+path.write_text(json.dumps(conf, indent=2))
+PYLAYOUT
   chown "${PI_USER}:${PI_USER}" "${SETTINGS_JSON}"
   chmod 0644 "${SETTINGS_JSON}"
 fi
@@ -160,8 +187,12 @@ cp -f "${CONF_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png" || true
 sudo install -d -m 0755 /usr/local/libexec/flexclock
 sudo install -o root -g root -m 0755 "${SCRIPTS_DIR}/web_network.py" /usr/local/libexec/flexclock/web_network.py
 sudo install -o root -g root -m 0755 "${SCRIPTS_DIR}/web_hostname.py" /usr/local/libexec/flexclock/web_hostname.py
+sudo install -o root -g root -m 0755 "${SCRIPTS_DIR}/web_display.py" /usr/local/libexec/flexclock/web_display.py
+sudo install -o root -g root -m 0644 "${ROOT_DIR}/display_layout.py" /usr/local/libexec/flexclock/display_layout.py
+printf '%s\n' "${CONF_DIR}/display-active.json" | sudo tee /usr/local/libexec/flexclock/display-active-path >/dev/null
+sudo chmod 0644 /usr/local/libexec/flexclock/display-active-path
 SUDOERS_FILE="/etc/sudoers.d/sign-controller-web"
-printf '%s ALL=(root) NOPASSWD: /usr/local/libexec/flexclock/web_network.py scan, /usr/local/libexec/flexclock/web_network.py wifi, /usr/local/libexec/flexclock/web_network.py ethernet, /usr/local/libexec/flexclock/web_network.py wifi_address, /usr/local/libexec/flexclock/web_hostname.py ""\n' "$PI_USER" | sudo tee "$SUDOERS_FILE" >/dev/null
+printf '%s ALL=(root) NOPASSWD: /usr/local/libexec/flexclock/web_network.py scan, /usr/local/libexec/flexclock/web_network.py wifi, /usr/local/libexec/flexclock/web_network.py ethernet, /usr/local/libexec/flexclock/web_network.py wifi_address, /usr/local/libexec/flexclock/web_hostname.py "", /usr/local/libexec/flexclock/web_display.py ""\n' "$PI_USER" | sudo tee "$SUDOERS_FILE" >/dev/null
 sudo chmod 0440 "$SUDOERS_FILE"
 sudo visudo -cf "$SUDOERS_FILE"
 # Configure only wlan0; preserve the installed manager and all Ethernet settings.
@@ -199,14 +230,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=${PI_USER}
+User=root
 WorkingDirectory=${ROOT_DIR}
 Environment=PYTHONUNBUFFERED=1
 Environment=LEDSIGN_LYNX_PORT=${LYNX_PORT}
 # Small delay to let the HAT / framebuffer settle
 ExecStartPre=/bin/sleep 2
 # Run the canonical entrypoint; it should launch splash.py then handle mode selection
-ExecStart=${ROOT_DIR}/venv/bin/python ${ROOT_DIR}/boot/splash.py
+ExecStart=${ROOT_DIR}/venv/bin/python -m boot.splash
 Restart=always
 RestartSec=3
 

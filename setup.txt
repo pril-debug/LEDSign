@@ -169,3 +169,107 @@ updates use only the selected interface and the fixed control interface.
 The tested package version is pinned in the script; DHCPCD_VERSION is an explicit
 installer override if a reviewed newer backport is selected. Never run a general
 system upgrade as part of this repair. No reboot is needed.
+
+Configurable LED panel layout
+-----------------------------
+Update both LEDSign and LEDSign_Site together. display_layout.py in the parent
+repository is shared by the website, renderer and installed display helper.
+The existing device settings and logo files are never replaced during upgrade.
+New installations default to 64x32 panels, 3 columns x 2 rows per side, two sides,
+12 chained panels, one HUB75 output, and 192x64 logical pixels per side.
+The default mapping is an editable proposal, not a claim about physical wiring.
+
+Display > Display settings provides panel presets, custom dimensions, sides,
+row/column totals, a visual per-side grid, chain assignments and panel rotation.
+Generate mappings across rows or down columns, optionally serpentine, from any
+corner. Adjust each tile's chain number and orientation to match the actual
+single ribbon-cable path. Side 2 receives identical content viewed from its front;
+there is no text reflection. Rectangular panels support 0/180 degrees; square
+panels additionally support 90/270. All positions and chain numbers must be unique.
+
+Save writes display_layout in settings.json while preserving unrelated settings.
+Apply activates the editor's current mapping in config/display-active.json and
+restarts only sign-ui. Save separately to retain that mapping in the editor.
+Once an active mapping exists, it takes precedence over saved edits on boot.
+Test Mapping temporarily applies the editor mapping, shows chain numbers, side
+numbers, upward arrows and a red upper-left marker, then restores the previous
+active mapping. Apply/Test end the current timing session. No network services
+are restarted. The controller must already be running; failed applies restore
+previous active settings. Hardware failures and rollback diagnostics belong in
+journalctl -u sign-ui, not normal configuration pages.
+
+Fresh installer requirements:
+- Install Pillow and the bundled matrix Python binding into the SAME virtualenv
+  used by sign-ui. setup_ledsign.sh now builds/installs that binding there.
+- Install scripts/web_display.py and display_layout.py root-owned into
+  /usr/local/libexec/flexclock, with display-active-path containing the absolute
+  path to config/display-active.json. The installer supplies a no-arguments sudo
+  allowance for this helper only. Do not grant general systemctl permission.
+- sign-ui must execute venv/bin/python -m boot.splash with the repository as its
+  working directory. GPIO initialization requires root. The adapter initializes GPIO as root, then drops groups, GID and UID to the
+  repository owner. This keeps private home directories accessible for assets
+  and mode imports without leaving the controller running as root. A systemd session has no keyboard terminal, so splash
+  remains visible; interactive terminal sessions retain the existing mode menu.
+- The installer preserves an existing sign-ui unit. For an older installation,
+  review its ExecStart and User explicitly; the old run-ui.sh incorrectly started
+  a second web server. The corrected script starts the controller. Do not run the
+  full installer just to upgrade a helper: it includes unrelated OS provisioning.
+
+Driver compatibility: the installed rgbmatrix RGBMatrixOptions accepts rows=32,
+cols=64, chain_length=12 and parallel=1, and RGBMatrix exposes SetImage. The bundled
+bindings/python/rgbmatrix/core.pyx implements SetImage and RGBMatrixOptions, and
+include/led-matrix.h documents the physical chain. No custom driver pixel mapper
+is required: Pillow crops one logical frame into panel tiles, compensates panel
+rotation, and packs a 768x32 driver image. This provides arbitrary panel order and
+identical sides with the existing driver. Longer chains reduce refresh rate;
+brightness, PWM bits, GPIO slowdown and hardware mapping retain existing values.
+
+Validation:
+  venv/bin/python -m unittest discover -s tests -v
+  venv/bin/python -m unittest discover -s web/tests -v
+  bash -n setup_ledsign.sh scripts/run-ui.sh
+Tests verify real pixel packing, identical sides, arbitrary chain permutations,
+rotations, invalid assignments, preserved settings, driver option construction,
+apply failures and restoration. Before commissioning, check power distribution,
+run Test Mapping with connected panels, check orientation/chain assignments on
+both sides, then exercise splash, timing, laps, rounds and FinishLynx. Software
+image tests do not prove panel scan compatibility, refresh or electrical behavior.
+
+Live display-controller repair (2026-10-25)
+------------------------------------------
+The installed sign-ui previously crash-looped: its virtualenv lacked rgbmatrix,
+its unit ran as admin before GPIO initialization, and snd_bcm2835 blocked PWM.
+Installed the local bundled rgbmatrix binding into venv and added the drop-in
+/etc/systemd/system/sign-ui.service.d/display-controller.conf:
+  [Service]
+  User=root
+  WorkingDirectory=/home/admin/sign-controller
+  ExecStart=
+  ExecStart=/home/admin/sign-controller/venv/bin/python -m boot.splash
+The matrix adapter drops to the repository owner's UID/GID after GPIO setup.
+No home-directory permissions were loosened. The unused snd_bcm2835 module was
+unloaded; /boot/firmware/config.txt now has dtparam=audio=off (original retained
+as config.txt.before-led-display) and /etc/modprobe.d/flexclock-led-audio.conf
+blacklists snd_bcm2835. HDMI/USB audio and network services were not changed.
+Fresh setup prepares the same audio boot settings. Reboot was not performed.
+The display helper and its root-owned shared validator are installed under
+/usr/local/libexec/flexclock. /etc/sudoers.d/flexclock-display permits only this
+helper without command arguments. The running dashboard serves the editor.
+
+Outdoor panel scanning
+----------------------
+The renderer reads led_multiplexing from settings.json (default 0 for standard
+panels). Wired Watts pnp5o2pk panels are 64x32 with 1/8 scan, requiring an
+outdoor multiplex mapper. Start with 1 (Stripe), as recommended by the bundled
+driver for this geometry; confirm markers on hardware before accepting it.
+Keep physical dimensions at 64x32. Panel chain order and rotation are separate.
+Adafruit RGB Matrix HAT hardware requires led_hardware_mapping=adafruit-hat
+unless the documented PWM hardware modification is present. Preserve existing
+device settings during upgrades; do not infer the mapper from dimensions alone.
+
+Boot screen: sign-ui displays the customer logo (falling back to the default
+logo) above a reserved address footer. The current primary IPv4 address appears
+at bottom right without an interface label. The screen refreshes every two
+seconds while idle so an address acquired after startup appears automatically.
+Device config, active panel mapping and uploaded logos remain in ignored config/;
+they persist on the Pi and must not be committed with credentials.

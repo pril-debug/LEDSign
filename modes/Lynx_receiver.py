@@ -46,6 +46,7 @@ Any unrecognized line is ignored gracefully.
 """
 from __future__ import annotations
 import argparse
+import sys
 import json
 import queue
 import select
@@ -65,6 +66,7 @@ except Exception:  # allows dev on non-Pi
     graphics = None
 
 APP_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(APP_ROOT))
 CONF_PATH = APP_ROOT / "config" / "settings.json"
 FONTS_DIR = APP_ROOT / "ledlib" / "fonts"
 
@@ -109,73 +111,37 @@ class Renderer:
     def __init__(self, settings: dict):
         if RGBMatrix is None:
             raise RuntimeError("rgbmatrix not available (run on Pi or install deps)")
-        opts = RGBMatrixOptions()
-        opts.rows = int(settings.get("led_rows", 64))
-        opts.cols = int(settings.get("led_cols", 64))
-        opts.chain_length = int(settings.get("led_chain", 2))
-        opts.parallel = int(settings.get("led_parallel", 1))
-        opts.pwm_bits = int(settings.get("led_pwm_bits", 11))
-        opts.brightness = int(settings.get("led_brightness", 80))
-        opts.gpio_slowdown = int(settings.get("led_gpio_slowdown", 2))
-        opts.hardware_mapping = settings.get("led_hardware_mapping", "regular")
-        self.matrix = RGBMatrix(options=opts)
-        # Fonts
-        self.font_title = graphics.Font(); self.font_title.LoadFont(str(FONTS_DIR / "10x20.bdf"))
-        # Try large clock font; fall back if missing
-        self.font_clock = graphics.Font()
-        for cand in ["16x27.bdf", "14x26.bdf", "13x24.bdf", "10x20.bdf"]:
-            try:
-                self.font_clock.LoadFont(str(FONTS_DIR / cand))
-                break
-            except Exception:
-                continue
-        self.font_small = graphics.Font(); self.font_small.LoadFont(str(FONTS_DIR / "7x13.bdf"))
-        # Colors
-        self.white = graphics.Color(255,255,255)
-        self.green = graphics.Color(0,255,0)
+        from modes.matrix_utils import build_matrix, load_font
+        self.matrix = build_matrix(settings)
+        self.font_title = load_font(18)
+        self.font_clock = load_font(27)
+        self.font_small = load_font(12)
 
-    def _center_text(self, canvas, font, text: str, y: int, color=None):
-        if not text: return 0
-        if color is None: color = self.white
-        width = graphics.DrawText(canvas, font, 0, y, color, text)
-        w = self.matrix.width
-        if width < w:
-            canvas.Clear()
-            x = (w - width)//2
-            graphics.DrawText(canvas, font, x, y, color, text)
-            return width
-        return width
+    def _frame(self, top, clock, heat='', results=False):
+        from PIL import Image, ImageDraw
+        w, h = self.matrix.width, self.matrix.height
+        image = Image.new('RGB', (w, h))
+        draw = ImageDraw.Draw(image)
+        def centered(text, font, y):
+            width = draw.textlength(text, font=font)
+            draw.text(((w-width)//2, y), text, font=font, fill='white')
+        centered(top, self.font_title, 0)
+        if results:
+            draw.line((0, h//2-4, w-1, h//2-4), fill='green')
+        centered(clock, self.font_clock, max(0, h//2-5))
+        if heat:
+            draw.text((2, max(0, h-13)), heat, font=self.font_small, fill='white')
+        self.matrix.SetImage(image)
 
     def render_header(self, st: State):
-        canvas = self.matrix.CreateFrameCanvas()
-        h = self.matrix.height
-        # Event title on top
-        self._center_text(canvas, self.font_title, st.event, 18)
-        # Optional heat info small (right-aligned-ish)
-        small = st.heat
-        if small:
-            graphics.DrawText(canvas, self.font_small, 2, h-2, self.white, small)
-        # Big clock centered
-        # place the baseline so digits are vertically centered
-        self._center_text(canvas, self.font_clock, st.clock, 46)
-        self.matrix.SwapOnVSync(canvas)
+        self._frame(st.event, st.clock, st.heat)
 
     def render_results(self, st: State):
-        canvas = self.matrix.CreateFrameCanvas()
-        w, h = self.matrix.width, self.matrix.height
         if not st.results:
-            self.render_header(st); return
+            return self.render_header(st)
         i = st.result_index % len(st.results)
         place, mark = st.results[i]
-        last = st.results_names[i]
-        # Top line: "1 - Riley"
-        top = f"{place} - {last}"
-        self._center_text(canvas, self.font_title, top, 20)
-        # Green thin bar
-        graphics.DrawLine(canvas, 0, 28, w-1, 28, self.green)
-        # Time under it, big
-        self._center_text(canvas, self.font_clock, mark, 58)
-        self.matrix.SwapOnVSync(canvas)
+        self._frame(f"{place} - {st.results_names[i]}", mark, results=True)
 
     def render(self, st: State):
         if st.mode == "RESULTS":
@@ -353,6 +319,7 @@ if __name__ == '__main__':
 # If you share your existing `example`, `example2`, and `FlexSign.lss`, we can
 # drop in the exact field tokens.
 
+"""
 # ===== Event open / header =====
 # Clear board and send event/heat
 CL
@@ -382,3 +349,5 @@ SR,$place,"$last","$mark"
 SRMODE,END
 
 # (Optional) To return to header/clock view for next race, you may send a new CL/RH/TM.
+
+"""

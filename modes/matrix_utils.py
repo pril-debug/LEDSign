@@ -1,5 +1,5 @@
 # /sign-controller/modes/matrix_utils.py
-import json, socket, fcntl, struct, os, time
+import json, socket, fcntl, struct, os, time, pwd
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
@@ -25,27 +25,54 @@ def read_conf():
     with open(CONF_PATH, "r") as f:
         return json.load(f)
 
-def build_matrix():
-    conf = read_conf()
-    # Your new physical layout: 3 panels chained horizontally, 2 in parallel
-    # Each panel is 64x32 → final = 192x64
-    options = RGBMatrixOptions()
-    options.rows       = 32                   # per-panel
-    options.cols       = 64                   # per-panel
-    options.chain_length = 3
-    options.parallel   = 2
-    options.pwm_bits   = conf.get("led_pwm_bits", 11)
-    options.brightness = conf.get("led_brightness", 100)  # crank as needed outdoors
-    options.gpio_slowdown = conf.get("led_gpio_slowdown", 2)
-    options.hardware_mapping = conf.get("led_hardware_mapping", "regular")
-    # Outdoor panels are bright; leave pwm_lsb_nanoseconds default, tune later
-    return RGBMatrix(options=options)
+class MappedMatrix:
+    """Expose one logical side to every mode; pack all panels on one output."""
+    def __init__(self, conf):
+        from display_layout import saved_layout, validate_layout
+        active = APP_ROOT / 'config/display-active.json'
+        state = json.loads(active.read_text()) if active.exists() else {}
+        if state.get('test_until') and time.time() >= state['test_until'] and state.get('restore'):
+            state['layout'] = state['restore']
+        self.layout = validate_layout(state['layout']) if state else saved_layout(conf)
+        self.test_until = state.get('test_until', 0)
+        self.width = self.layout['width'] * self.layout['columns']
+        self.height = self.layout['height'] * self.layout['rows']
+        options = RGBMatrixOptions()
+        options.rows = self.layout['height']
+        options.cols = self.layout['width']
+        options.chain_length = len(self.layout['panels'])
+        options.parallel = 1
+        options.multiplexing = conf.get('led_multiplexing', 0)
+        options.pwm_bits = conf.get('led_pwm_bits', 11)
+        options.brightness = conf.get('led_brightness', 80)
+        options.gpio_slowdown = conf.get('led_gpio_slowdown', 2)
+        options.hardware_mapping = conf.get('led_hardware_mapping', 'regular')
+        # Initialize GPIO as root, then run rendering as the repository owner.
+        # The driver's default daemon user cannot traverse a private home folder.
+        owner = pwd.getpwuid(APP_ROOT.stat().st_uid)
+        options.drop_privileges = False
+        self.matrix = RGBMatrix(options=options)
+        if os.getuid() == 0 and owner.pw_uid != 0:
+            os.setgroups([])
+            os.setgid(owner.pw_gid)
+            os.setuid(owner.pw_uid)
+
+    def SetImage(self, image):
+        from display_layout import pack_image
+        if image.size != (self.width, self.height):
+            raise ValueError('Frame does not match the configured logical display size')
+        self.matrix.SetImage(pack_image(image, self.layout, time.time() < self.test_until))
+
+
+def build_matrix(conf=None):
+    return MappedMatrix(conf if conf is not None else read_conf())
 
 def canvas_image(matrix):
     # Return a PIL image sized to the matrix
     width  = matrix.width
     height = matrix.height
-    return Image.new("RGB", (width, height)), ImageDraw.Draw(Image.new("RGB", (width, height)))
+    image = Image.new("RGB", (width, height))
+    return image, ImageDraw.Draw(image)
 
 def get_primary_ip():
     """
