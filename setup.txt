@@ -201,3 +201,18 @@ Fresh installs add SupplementaryGroups=systemd-journal to sign-web only. No new
 sudo permission or dependency is required. If history cannot be read, the page
 reports that it is unavailable rather than presenting an empty success state.
 Restart only sign-web after deploying this revision. Do not restart other services.
+
+Network page layout and connection details
+------------------------------------------
+Ethernet and Wi-Fi each have one column containing status, current connection
+facts and their own settings. Narrow screens stack complete columns. No details,
+commands or configuration values are hidden behind expandable controls.
+Read-only observations use ip -j address, ip -j -4 route show, resolvconf -l and
+iw dev wlan0 link. DNS entries are matched to their source interface, not copied
+from another connection. Gateways are extracted as addresses; subnet prefixes
+are displayed as dotted subnet masks. Unknown values remain Unavailable.
+The static-address form accepts a dotted subnet mask; older CIDR form payloads
+remain compatible. Confirmations use the existing application modal. Helper
+errors stay in server logs; the page uses short user-facing errors. No additional
+packages, permissions, network service changes or sudoers rules are needed.
+Deploy with a restart of sign-web only. Do not apply live network settings.
