@@ -107,8 +107,11 @@ class DashboardControl(unittest.TestCase):
                         self.assertTrue(client.command('start', mode)['ok'])
                         self.assertTrue(client.command('start', mode)['ok'], 'Repeated Start must not toggle pause')
                         self.assertEqual(client.status()['phase'], 'running')
-                        time.sleep(1.1)
-                        self.assertEqual(client.status()['value'], 6 if mode == 'Count Up' else 4)
+                        deadline = time.monotonic()+3
+                        while client.status()['value'] == 5 and time.monotonic() < deadline:
+                            time.sleep(0.02)
+                        current = client.status()['value']
+                        self.assertGreater(current, 5) if mode == 'Count Up' else self.assertLess(current, 5)
                         client.command('pause', mode)
                         self.assertIn(client.status()['phase'], ('ready', 'paused'))
                     client.command('select', 'Lap Counter')

@@ -26,7 +26,7 @@ ASSET = 'ledsign-release.tar.gz'
 TAG = re.compile(r'v?\d+\.\d+(?:\.\d+)?(?:[-+][A-Za-z0-9.-]+)?\Z')
 MAX_DOWNLOAD = 256 * 1024 * 1024
 MAX_UNPACK = 512 * 1024 * 1024
-BUSY = {'queued', 'downloading', 'preparing', 'installing', 'verifying', 'restoring'}
+BUSY = {'queued', 'downloading', 'validating', 'preparing', 'installing', 'restarting', 'verifying', 'restoring'}
 
 
 def read(path, default=None):
@@ -49,8 +49,9 @@ def atomic(path, data):
         os.close(fd)
 
 
-def status(phase, message):
+def status(phase, message, **details):
     previous = read(STATE/'status.json', {})
+    previous.update(details)
     previous.update(phase=phase, message=message, updated=datetime.now(timezone.utc).isoformat())
     atomic(STATE/'status.json', previous)
 
@@ -273,9 +274,10 @@ def prepare(tag, current):
     archive = STATE/'download.tar.gz'
     status('downloading', 'Downloading the selected release…')
     download(tag, archive)
-    status('preparing', 'Preparing application files and dependencies…')
+    status('validating', 'Checking the installation package…')
     try:
         target = unpack(archive, workspace, tag)
+        status('preparing', 'Preparing the new application…')
         config = read(SETTINGS)
         (target/'config').symlink_to(config['config'], target_is_directory=True)
         # Preserve the Pi-specific GPIO driver and all baseline dependencies.
@@ -319,6 +321,7 @@ def transact(request):
         status('installing', 'Installing application software…')
         switch(target)
         sync_helpers(target)
+        status('restarting', 'Restarting the clock and dashboard…')
         restart()
         status('verifying', 'Checking the display controller and dashboard…')
         verify(target)
@@ -332,6 +335,7 @@ def transact(request):
         cleanup()
     except Exception:
         logging.exception('Software operation failed')
+        failed_phase = read(STATE/'status.json', {}).get('phase', 'queued')
         message = 'Installation failed. The current application was kept.'
         if journal:
             try:
@@ -345,7 +349,7 @@ def transact(request):
                 history(action, old, new, False, 'Automatic recovery failed.')
                 return
         history(action, old, new, False, message)
-        status('failed', message)
+        status('failed', message, failed_phase=failed_phase)
         if action == 'install' and target and target.parent.exists():
             shutil.rmtree(target.parent)
 
@@ -371,13 +375,18 @@ def submit(payload):
             raise ValueError('An update is already in progress.')
         if payload['action'] == 'rollback' and not read(STATE/'installed.json', {}).get('previous'):
             raise ValueError('No previous version is available.')
-        atomic(STATE/'request.json', dict(action=payload['action'], version=payload.get('version')))
-        status('queued', 'Preparing the software operation…')
+        operation_id = uuid.uuid4().hex
+        installed = read(STATE/'installed.json', {})
+        target_version = payload.get('version') if payload['action'] == 'install' else installed.get('previous_version')
+        atomic(STATE/'request.json', dict(action=payload['action'], version=target_version, operation_id=operation_id))
+        status('queued', 'Preparing the software operation…', operation_id=operation_id,
+               action=payload['action'], version=target_version, previous_version=installed.get('version'), failed_phase=None)
         try:
             command(['systemctl', 'start', '--no-block', 'flexclock-update.service'], timeout=10)
         except Exception:
             status('failed', 'The software operation could not start.')
             raise
+        return operation_id
 
 
 def main():
@@ -405,8 +414,8 @@ def main():
     elif not sys.argv[1:]:
         try:
             payload = json.loads(sys.stdin.read(4097))
-            submit(payload)
-            print(json.dumps(dict(ok=True)))
+            operation_id = submit(payload)
+            print(json.dumps(dict(ok=True, operation_id=operation_id)))
         except Exception as error:
             logging.exception('Update request failed')
             print(json.dumps(dict(ok=False, message=str(error) if isinstance(error, ValueError)

@@ -202,3 +202,27 @@ class Updates(unittest.TestCase):
             self.assertTrue(info['installable'])
         for tag in ('1','1.42/../../bad','main','1.42.0.1'):
             self.assertIsNone(u.release_info(dict(tag_name=tag)))
+
+    def test_operation_receipt_and_phase_metadata_persist(self):
+        with patch.object(u,'command'),patch.object(u.subprocess,'check_output',return_value=b'inactive'):
+            operation=u.submit(dict(action='install',version='1.43'))
+        self.assertRegex(operation,r'^[0-9a-f]{32}$')
+        report=u.read(self.state/'status.json')
+        self.assertEqual(report['operation_id'],operation)
+        self.assertEqual(report['version'],'1.43')
+        self.assertEqual(report['previous_version'],'v1.0.0')
+        self.assertEqual(u.read(self.state/'request.json')['operation_id'],operation)
+        u.status('validating','Checking package')
+        self.assertEqual(u.read(self.state/'status.json')['operation_id'],operation)
+        u.status('restarting','Restarting')
+        self.assertEqual(u.read(self.state/'status.json')['operation_id'],operation)
+        self.assertIn('validating',u.BUSY)
+        self.assertIn('restarting',u.BUSY)
+
+    def test_restart_phase_precedes_health_check_and_success(self):
+        with patch.object(u,'prepare',return_value=self.new),patch.object(u,'restart'),patch.object(u,'verify'),patch.object(u,'status',wraps=u.status) as report:
+            u.transact(dict(action='install',version='v2.0.0'))
+        phases=[call.args[0] for call in report.call_args_list]
+        self.assertLess(phases.index('installing'),phases.index('restarting'))
+        self.assertLess(phases.index('restarting'),phases.index('verifying'))
+        self.assertLess(phases.index('verifying'),phases.index('success'))

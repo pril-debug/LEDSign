@@ -521,3 +521,14 @@ the pinned website revision, packages tracked application files, validates the
 archive using the actual updater, and publishes ledsign-release.tar.gz. GitHub's
 asset SHA-256 is verified by the Pi before installation. Publishing does not
 install the release on any device. Never package config, environments, or Git data.
+
+Guided software installation (1.43)
+Install Update checks the clock's access to the GitHub update service before
+queueing. Rollback remains available offline. The dashboard shows a dedicated
+progress view with real download, validation, preparation, apply, restart, and
+health-check stages; it reconnects across application restarts. Each operation
+has a root-generated identifier so an earlier success cannot complete a newer
+operation's page. Completion requires matching operation and installed version.
+Keep the clock powered on and online during installation. No percentage or
+completion is inferred from elapsed time. Installer failures retain the existing
+application or attempt automatic restoration of the previous application.
