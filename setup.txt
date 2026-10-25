@@ -508,3 +508,16 @@ Saved logos and uploading share one full-width Clock logo section in Settings.
 Software updates uses a full-width settings row. Display navigation and its
 standalone preview page were removed; /display redirects to /dashboard.
 The authenticated /display/settings installer API is retained for compatibility.
+
+Versioned manual releases
+VERSION identifies the application build (for example, 1.41). The updater accepts
+two-part versions such as 1.42 as well as existing three-part release tags.
+The dashboard displays a spinner during manual checks and saves the last
+successful check time, including checks with no available updates.
+To publish, commit the matching controller and website sources; set VERSION,
+.github/release.json (version and exact website_commit), and .github/RELEASE_NOTES.md.
+Pushing the release.json change to main runs the release workflow. It checks out
+the pinned website revision, packages tracked application files, validates the
+archive using the actual updater, and publishes ledsign-release.tar.gz. GitHub's
+asset SHA-256 is verified by the Pi before installation. Publishing does not
+install the release on any device. Never package config, environments, or Git data.

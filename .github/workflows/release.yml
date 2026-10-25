@@ -1,0 +1,60 @@
+name: Publish installable FlexClock release
+on:
+  push:
+    branches: [main]
+    paths: [.github/release.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: flexclock-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate release pair
+        id: release
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          release = json.loads(Path('.github/release.json').read_text())
+          version, website = release['version'], release['website_commit']
+          assert re.fullmatch(r'\d+\.\d+(?:\.\d+)?', version), 'Invalid release version'
+          assert re.fullmatch(r'[0-9a-f]{40}', website), 'Pin a website commit'
+          assert Path('VERSION').read_text().strip() == version, 'VERSION mismatch'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\nwebsite={website}\n')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: pril-debug/LEDSign_Site
+          ref: ${{ steps.release.outputs.website }}
+          path: web
+          persist-credentials: false
+      - name: Package and validate
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          python3 scripts/package_release.py "$RELEASE_VERSION" --output "$RUNNER_TEMP/ledsign-release.tar.gz"
+          python3 - <<'PY'
+          import importlib.util, os, tempfile
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('updater', 'scripts/software_updates.py')
+          updater = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(updater)
+          with tempfile.TemporaryDirectory() as tmp:
+              app = updater.unpack(Path(os.environ['RUNNER_TEMP'])/'ledsign-release.tar.gz', Path(tmp)/'unpacked', os.environ['RELEASE_VERSION'])
+              assert updater.version(app) == os.environ['RELEASE_VERSION']
+          PY
+      - name: Publish release and installation package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          gh release create "$RELEASE_VERSION" "$RUNNER_TEMP/ledsign-release.tar.gz" --target "$GITHUB_SHA" --title "FlexClock $RELEASE_VERSION" --notes-file .github/RELEASE_NOTES.md --latest

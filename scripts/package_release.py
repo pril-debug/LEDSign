@@ -10,7 +10,7 @@ import tempfile
 import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_FILES = ('FlexClock-TOD.lss', 'FlexClock.lss', 'lynx-logo.png', 'boot', 'modes', 'scripts', 'display_layout.py', 'setup.txt', 'setup_ledsign.sh', 'AGENTS.md')
+APP_FILES = ('VERSION', 'FlexClock-TOD.lss', 'FlexClock.lss', 'lynx-logo.png', 'boot', 'modes', 'scripts', 'display_layout.py', 'setup.txt', 'setup_ledsign.sh', 'AGENTS.md')
 EXCLUDE = shutil.ignore_patterns('__pycache__', '*.pyc', '.git', '.gitignore', 'config', 'venv', 'node_modules')
 
 
@@ -45,11 +45,13 @@ def copy_tracked(root, destination):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('version', help='Release tag, such as v1.0.0')
+    parser.add_argument('version', help='Release tag, such as 1.42')
     parser.add_argument('--output', type=Path, default=Path('/tmp/ledsign-release.tar.gz'))
     args = parser.parse_args()
-    if not re.fullmatch(r'v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?', args.version):
+    if not re.fullmatch(r'v?\d+\.\d+(?:\.\d+)?(?:[-+][A-Za-z0-9.-]+)?', args.version):
         parser.error('Use a versioned release tag.')
+    if (ROOT/'VERSION').read_text().strip() != args.version:
+        parser.error('VERSION must match the release tag.')
     # Never publish local credentials or unreviewed working-tree changes.
     for path in (ROOT, ROOT/'web'):
         if subprocess.check_output(['git', '-C', str(path), 'status', '--porcelain']).strip():

@@ -194,3 +194,11 @@ class Updates(unittest.TestCase):
         with patch.object(u, 'command') as command:
             u.restart()
         self.assertEqual(command.call_args.args[0], ['systemctl', 'restart', 'sign-ui', 'sign-web'])
+
+    def test_two_part_release_tags_and_verified_assets(self):
+        for tag in ('1.41','1.42','v1.42','v1.42.1'):
+            info=u.release_info(dict(tag_name=tag,assets=[dict(name=u.ASSET,digest='sha256:'+'b'*64)]))
+            self.assertEqual(info['version'],tag)
+            self.assertTrue(info['installable'])
+        for tag in ('1','1.42/../../bad','main','1.42.0.1'):
+            self.assertIsNone(u.release_info(dict(tag_name=tag)))
