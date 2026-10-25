@@ -532,3 +532,20 @@ operation's page. Completion requires matching operation and installed version.
 Keep the clock powered on and online during installation. No percentage or
 completion is inferred from elapsed time. Installer failures retain the existing
 application or attempt automatic restoration of the previous application.
+
+Default FlexClock artwork
+FlexClock-Light.png in the application root is the default startup/boot-menu
+logo and the default-logo download. Customer logos continue to take priority.
+The installer copies the supplied image to config/FlexClock-Light.png instead
+of generating placeholder artwork; release packages include the root PNG.
+Older logo_path settings remain a fallback if the packaged artwork is absent.
+For an already running controller, updating its existing default-logo file
+also refreshes menu artwork without restarting the clock or ending a session.
+
+Site branding and entry pages
+FlexClock.png is the logo on white headers/sidebar; FlexClock-Light.png is used
+in the dark footer and as the default LED startup logo. Both original images
+are shipped in release archives. /brand serves only these two public PNGs.
+The public home page has the actual login form and short descriptions of clock
+modes, FinishLynx and settings. /login uses the same form. Authenticated visits
+to either entry page go to the dashboard. Customer logo uploads remain separate.

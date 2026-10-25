@@ -154,7 +154,7 @@ PY
   "led_gpio_slowdown": 2,
   "led_hardware_mapping": "regular",
   "led_multiplexing": 0,
-  "logo_path": "/home/${PI_USER}/sign-controller/config/Logo-White.png",
+  "logo_path": "/home/${PI_USER}/sign-controller/config/FlexClock-Light.png",
   "customer_logo_path": "/home/${PI_USER}/sign-controller/config/customer_logo.png",
   "web_port": 8000,
   "auth": { "username": "admin", "password_hash": "${ADMIN_HASH}" }
@@ -176,14 +176,8 @@ PYLAYOUT
   chmod 0644 "${SETTINGS_JSON}"
 fi
 
-# placeholder logo
-if [ ! -f "${CONF_DIR}/Logo-White.png" ]; then
-  echo "==> Creating placeholder white logo"
-  convert -size 256x128 xc:black -gravity center -pointsize 22 -fill white \
-    -annotate 0 "LED Sign" "${CONF_DIR}/Logo-White.png"
-fi
-mkdir -p "${WEB_DIR}/static"
-cp -f "${CONF_DIR}/Logo-White.png" "${WEB_DIR}/static/white-logo.png" || true
+# Ship the real default artwork; customer uploads remain separate.
+install -m 0644 "${ROOT_DIR}/FlexClock-Light.png" "${CONF_DIR}/FlexClock-Light.png"
 
 # -------- narrow privileged helper --------
 # Install root-owned code rather than granting sudo to user-writable scripts.

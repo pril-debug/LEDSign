@@ -11,8 +11,9 @@ CONF = read_conf()
 
 def find_logo():
     p_custom = Path(CONF.get("customer_logo_path", ""))
-    p_default = Path(CONF.get("logo_path", ""))
-    for p in [p_custom, p_default]:
+    p_default = APP_ROOT / "FlexClock-Light.png"
+    p_legacy = Path(CONF.get("logo_path", ""))
+    for p in [p_custom, p_default, p_legacy]:
         if p.is_file():
             return Path(p)
     return None

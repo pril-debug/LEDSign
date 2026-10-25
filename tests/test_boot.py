@@ -32,3 +32,20 @@ class BootScreenTests(unittest.TestCase):
         with patch.object(boot, 'find_logo', return_value=None):
             frame = boot.boot_frame(types.SimpleNamespace(width=192,height=64), None)
         self.assertIsNotNone(frame.getbbox())
+
+    def test_packaged_default_customer_priority_and_legacy_fallback(self):
+        with patch.dict('sys.modules', rgbmatrix=types.SimpleNamespace(RGBMatrix=Mock(), RGBMatrixOptions=Mock())):
+            boot = importlib.import_module('boot.splash')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            customer=root/'customer.png'
+            legacy=root/'old-default.png'
+            default=root/'FlexClock-Light.png'
+            for path in (legacy,default):Image.new('RGB',(64,32),'blue').save(path)
+            conf=dict(customer_logo_path=str(customer),logo_path=str(legacy))
+            with patch.object(boot,'APP_ROOT',root),patch.object(boot,'CONF',conf):
+                self.assertEqual(boot.find_logo(),default)
+                Image.new('RGB',(64,32),'red').save(customer)
+                self.assertEqual(boot.find_logo(),customer)
+                customer.unlink();default.unlink()
+                self.assertEqual(boot.find_logo(),legacy)

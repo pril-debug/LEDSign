@@ -10,7 +10,7 @@ import tempfile
 import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_FILES = ('VERSION', 'FlexClock-TOD.lss', 'FlexClock.lss', 'lynx-logo.png', 'boot', 'modes', 'scripts', 'display_layout.py', 'setup.txt', 'setup_ledsign.sh', 'AGENTS.md')
+APP_FILES = ('VERSION', 'FlexClock-Light.png', 'FlexClock.png', 'FlexClock-TOD.lss', 'FlexClock.lss', 'lynx-logo.png', 'boot', 'modes', 'scripts', 'display_layout.py', 'setup.txt', 'setup_ledsign.sh', 'AGENTS.md')
 EXCLUDE = shutil.ignore_patterns('__pycache__', '*.pyc', '.git', '.gitignore', 'config', 'venv', 'node_modules')
 
 
