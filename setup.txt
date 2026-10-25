@@ -174,3 +174,14 @@ hostname operations are mocked. Browser checks, an approved real hostname
 change/name discovery check and Wi-Fi commissioning remain separate live tests.
 Inspect sign-ui restart counts in System Information; a restarting service is
 reported as needing attention, not as a healthy starting controller.
+
+Device-name input correction
+----------------------------
+Mixed-case device names are accepted in the form and normalized before validation
+and saving: FlexClock1 becomes flexclock1. The root-owned hostname helper also
+normalizes its JSON input. Install the updated scripts/web_hostname.py at the
+existing /usr/local/libexec/flexclock/web_hostname.py path; permissions and sudoers
+are unchanged. Restart only sign-web to deploy the updated Flask code.
+Confirmation uses the shared application modal, with Cancel/Escape and Confirm;
+the device-name form no longer requires a redundant confirmation checkbox.
+Do not change the real hostname as part of automated tests or deployment.

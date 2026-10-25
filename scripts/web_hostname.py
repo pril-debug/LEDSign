@@ -7,8 +7,10 @@ import sys
 
 
 def validate_hostname(value):
+    if isinstance(value, str):
+        value = value.strip().lower()
     if not isinstance(value, str) or not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', value):
-        raise ValueError('Use 1–63 lowercase letters, numbers or hyphens. Start and end with a letter or number.')
+        raise ValueError('Use letters, numbers and hyphens, with a letter or number at each end (up to 63 characters).')
     return value
 
 
