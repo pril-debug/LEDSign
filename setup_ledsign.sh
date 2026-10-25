@@ -177,6 +177,7 @@ Wants=network-online.target
 
 [Service]
 User=${PI_USER}
+SupplementaryGroups=systemd-journal
 WorkingDirectory=${WEB_DIR}
 Environment=PYTHONUNBUFFERED=1
 ExecStart=${ROOT_DIR}/venv/bin/waitress-serve --listen=127.0.0.1:8000 app:app

@@ -185,3 +185,19 @@ are unchanged. Restart only sign-web to deploy the updated Flask code.
 Confirmation uses the shared application modal, with Cancel/Escape and Confirm;
 the device-name form no longer requires a redundant confirmation checkbox.
 Do not change the real hostname as part of automated tests or deployment.
+
+
+Service activity / Logging
+--------------------------
+The authenticated /logs page reads only the five allowlisted service journals.
+Queries are bounded to 1,000 recent entries in a selected hour/day/week, with
+search, severity filters and 50-event pages. Recognized service events are shown
+in plain language; unknown diagnostic output is summarized rather than exposed.
+The page is read-only and never restarts or changes services. It does not persist
+or expose credentials, raw traces or command lines. Search applies to displayed
+messages and service names, not raw diagnostic text.
+The existing admin account belongs to adm and can already read the system journal.
+Fresh installs add SupplementaryGroups=systemd-journal to sign-web only. No new
+sudo permission or dependency is required. If history cannot be read, the page
+reports that it is unavailable rather than presenting an empty success state.
+Restart only sign-web after deploying this revision. Do not restart other services.
