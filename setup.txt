@@ -37,10 +37,11 @@ cd /home/admin/sign-controller
 venv/bin/pip install -r web/requirements.txt
 sudo install -d -m 0755 /usr/local/libexec/flexclock
 sudo install -o root -g root -m 0755 scripts/web_network.py /usr/local/libexec/flexclock/web_network.py
+sudo install -o root -g root -m 0755 scripts/web_hostname.py /usr/local/libexec/flexclock/web_hostname.py
 
 Replace the old broad sudoers rule (after review), using sudo visudo -f
 /etc/sudoers.d/sign-controller-web. Exact content for this device:
-admin ALL=(root) NOPASSWD: /usr/local/libexec/flexclock/web_network.py scan, /usr/local/libexec/flexclock/web_network.py wifi, /usr/local/libexec/flexclock/web_network.py ethernet
+admin ALL=(root) NOPASSWD: /usr/local/libexec/flexclock/web_network.py scan, /usr/local/libexec/flexclock/web_network.py wifi, /usr/local/libexec/flexclock/web_network.py ethernet, /usr/local/libexec/flexclock/web_hostname.py ""
 
 sudo visudo -cf /etc/sudoers.d/sign-controller-web
 sudo systemctl restart sign-web
@@ -51,7 +52,7 @@ The website creates config/.web-secret (0600) on first import. Preserve it acros
 worker/service restarts; exclude it from version control. SC_SECRET may override
 it. Use TLS at nginx on untrusted networks; set SESSION_COOKIE_SECURE when TLS
 is enabled. Sessions expire after eight hours; password changes invalidate all
-sessions. The existing username/hash is retained. New passwords need 12 characters.
+sessions. The existing username/hash is retained. New passwords need at least 5 characters; there are no character-class requirements.
 
 Read-only commissioning checks
 -----------------------------
@@ -132,3 +133,44 @@ tablet and phone widths is still required; no browser automation is installed on
 this Pi. Check keyboard focus, scan selection, confirmation dialogs, error states
 and loading feedback. Test current logo visibility on the actual LED separately;
 web image rendering does not prove controller consumption.
+
+
+Full-Color LED Race Clock redesign — October 25, 2026
+---------------------------------------------------
+Current product name: FlexClock — Full-Color LED Race Clock. Shared sidebar and
+mobile navigation, colored status cards, separate connection summaries, grouped
+Settings, saved-logo previews and RGB clock presentation replace the original UI.
+Static asset URLs include a content hash to bypass the previous cached CSS/JS.
+No new dependencies or frontend build step are needed.
+
+Password policy: minimum 5, maximum 128 characters. No uppercase, lowercase,
+number or symbol requirement; no strength meter. The current password is required.
+Storage remains hashed; password changes invalidate existing sessions.
+
+Hostname management uses the installed /usr/bin/hostnamectl mechanism. The separate
+root-owned /usr/local/libexec/flexclock/web_hostname.py helper takes JSON on stdin,
+accepts only 1–63 lowercase ASCII letters/numbers/hyphens with alphanumeric ends,
+and rejects requests without explicit confirmation. sudoers permits no command
+arguments for this helper, denoted by the empty double quotes in the rule above.
+Flask requires a valid authenticated session, CSRF token and confirmation checkbox.
+The helper revalidates input, runs hostnamectl without a shell, then checks the
+saved static name. It does not restart network services or the LED controller.
+Its commands after a confirmed request are exactly:
+  /usr/bin/hostnamectl set-hostname VALIDATED_NAME
+  /usr/bin/hostnamectl --static
+A failure to verify is reported as such; it is not described as success.
+Hostname changes may affect name-based discovery; do not promise immediate mDNS
+or DHCP propagation. No hostname change was executed during development/tests.
+The hostname setting is separate from the network-write guard. Do not enable
+/etc/flexclock-network-enabled when deploying this helper.
+
+Deployment for this revision: install only the additional hostname helper and
+validate/install the revised narrow sudoers file, then restart only sign-web.
+Preserve the current hostname, password, device config, assets and other services.
+The complete installer is not needed for an existing Pi.
+
+Verification: run the existing web unittest command (now 28 tests). The new
+hostname operations are mocked. Browser checks, an approved real hostname
+change/name discovery check and Wi-Fi commissioning remain separate live tests.
+Inspect sign-ui restart counts in System Information; a restarting service is
+reported as needing attention, not as a healthy starting controller.
