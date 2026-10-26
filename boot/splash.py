@@ -4,7 +4,7 @@ import time, os, sys
 from pathlib import Path
 from PIL import Image, ImageDraw
 
-from modes.matrix_utils import build_matrix, read_conf, center_image_on, render_text, push, get_primary_ip, load_font
+from modes.matrix_utils import build_matrix, read_conf, center_image_on, render_text, push, get_primary_ip, load_font, hotspot_status
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 CONF = read_conf()
@@ -35,6 +35,11 @@ def show_splash(matrix, seconds=3):
     time.sleep(seconds)
 
 def boot_frame(matrix, ip, mode="Count Up", message=None):
+    hotspot = hotspot_status()
+    # get_primary_ip already prefers Ethernet, then wlan0. An available
+    # station address takes precedence over the optional configuration AP.
+    if hotspot and (not ip or ip == '192.168.4.1'):
+        return hotspot_menu_frame(matrix, mode, message, hotspot)
     bg = Image.new("RGB", (matrix.width, matrix.height), (0, 0, 0))
     draw = ImageDraw.Draw(bg)
     labels = ["> " + mode, ip or "No network"]
@@ -82,6 +87,56 @@ def boot_frame(matrix, ip, mode="Count Up", message=None):
         error.thumbnail((matrix.width, logo_area_height))
         bg.paste(error, ((matrix.width-error.width)//2, (logo_area_height-error.height)//2))
     return bg
+
+
+def hotspot_menu_frame(matrix, mode, message, hotspot):
+    """Keep the logo and selection; stack hotspot details at bottom right."""
+    frame = Image.new('RGB', (matrix.width, matrix.height), 'black')
+    labels = ['> ' + mode, hotspot['ssid'], hotspot['url']]
+    size = min(10, max(6, matrix.height // 6))
+    def tiles(size):
+        font = load_font(size)
+        result = []
+        for index, label in enumerate(labels):
+            box = ImageDraw.Draw(frame).textbbox((0, 0), label, font=font)
+            tile = Image.new('RGB', (max(1, box[2]-box[0]), max(1, box[3]-box[1])), 'black')
+            ImageDraw.Draw(tile).text((-box[0], -box[1]), label, font=font,
+                                      fill='yellow' if index < 2 else 'white')
+            result.append(tile)
+        return result
+    parts = tiles(size)
+    while size > 6 and parts[0].width + max(p.width for p in parts[1:]) + 8 > matrix.width:
+        size -= 1
+        parts = tiles(size)
+    available = max(1, matrix.width - 6)
+    right_width = max(1, min(max(p.width for p in parts[1:]), available * 2 // 3))
+    left_width = max(1, available - right_width)
+    row = max(1, min(max(p.height for p in parts) + 2, (matrix.height - 3) // 3))
+    for index, tile in enumerate(parts):
+        limit = left_width if index == 0 else right_width
+        if tile.width > limit or tile.height > row - 1:
+            tile = tile.resize((min(tile.width, limit), max(1, min(tile.height, row - 1))))
+        x = 2 if index == 0 else matrix.width - 2 - tile.width
+        y = matrix.height - 2 - tile.height - (row if index == 1 else 0)
+        frame.paste(tile, (x, y))
+    logo_height = max(1, matrix.height - 2 * row - 3)
+    logo_path = find_logo()
+    if logo_path:
+        try:
+            with Image.open(logo_path) as source:
+                logo = scale_to_fit(source.convert('RGBA'), max(1, matrix.width - 4), logo_height)
+            frame.paste(logo, ((matrix.width-logo.width)//2, (logo_height-logo.height)//2), logo)
+        except OSError:
+            pass
+    if message:
+        ImageDraw.Draw(frame).rectangle((0, 0, matrix.width-1, logo_height-1), fill='black')
+        font = load_font(6)
+        box = ImageDraw.Draw(frame).textbbox((0, 0), message, font=font)
+        error = Image.new('RGB', (max(1, box[2]-box[0]), max(1, box[3]-box[1])))
+        ImageDraw.Draw(error).text((-box[0], -box[1]), message, font=font, fill='red')
+        error.thumbnail((matrix.width, logo_height))
+        frame.paste(error, ((matrix.width-error.width)//2, (logo_height-error.height)//2))
+    return frame
 
 
 def show_ip(matrix):

@@ -121,3 +121,15 @@ def render_text(img, text, font, fill=(255,255,255), xy=("center","center")):
 
 def push(matrix, img):
     matrix.SetImage(img.convert("RGB"))
+
+
+def hotspot_status():
+    """Return ready hotspot details for the menu footer only."""
+    try:
+        state = json.loads(Path('/run/flexclock-hotspot.json').read_text())
+        if (isinstance(state, dict) and state.get('mode') == 'hotspot' and isinstance(state.get('ssid'), str)
+                and state['ssid'].startswith('FlexClock-')):
+            return dict(ssid=state['ssid'], url='http://192.168.4.1')
+    except (OSError, ValueError, TypeError):
+        pass
+    return None

@@ -13,6 +13,9 @@ class MenuTests(unittest.TestCase):
     def setUp(self):
         self.menu = importlib.import_module('modes.menu')
         self.boot = importlib.import_module('boot.splash')
+        hotspot = patch.object(self.boot, 'hotspot_status', return_value=None)
+        hotspot.start()
+        self.addCleanup(hotspot.stop)
 
     def test_real_terminal_arrow_sequences_and_enter(self):
         master, slave = pty.openpty()

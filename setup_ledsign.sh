@@ -49,7 +49,7 @@ PKGS=(
   libtiff-dev libopenblas-dev cython3
   nginx imagemagick
   openresolv
-  iw wpasupplicant rfkill
+  iw wpasupplicant rfkill dnsmasq-base
 )
 sudo apt-get install -y "${PKGS[@]}"
 echo "==> Network manager preserved; see setup.txt for supervised commissioning"
@@ -194,6 +194,7 @@ sudo chmod 0440 "$SUDOERS_FILE"
 sudo visudo -cf "$SUDOERS_FILE"
 # Configure only wlan0; preserve the installed manager and all Ethernet settings.
 sudo bash "${SCRIPTS_DIR}/setup_wifi.sh"
+sudo bash "${SCRIPTS_DIR}/setup_hotspot.sh"
 "${PIP}" install -r "${WEB_DIR}/requirements.txt"
 
 # The local controller socket is restricted to the dashboard's config owner.

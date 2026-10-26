@@ -1,0 +1,10 @@
+[Unit]
+Description=FlexClock hotspot DHCP (wlan0 only)
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/chown nobody:nogroup /run/flexclock-hotspot-dhcp
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/usr/local/libexec/flexclock/hotspot-dnsmasq.conf
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=flexclock-hotspot-dhcp

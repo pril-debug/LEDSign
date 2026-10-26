@@ -549,3 +549,210 @@ are shipped in release archives. /brand serves only these two public PNGs.
 The public home page has the actual login form and short descriptions of clock
 modes, FinishLynx and settings. /login uses the same form. Authenticated visits
 to either entry page go to the dashboard. Customer logo uploads remain separate.
+
+Automatic Wi-Fi configuration hotspot
+--------------------------------------
+The supported dhcpcd + wpa_supplicant stack now includes optional installed
+fallback, enabled by setup_ledsign.sh on fresh installations. It uses the existing
+supplicant's AP mode, not a replacement network manager or hostapd. The Wi-Fi
+adapter must report AP capability and the OS must have the correct regulatory
+country. Channel 1 (2412 MHz) is used. Unsupported stacks are refused.
+
+When enabled, boot first allows 30 seconds for saved Wi-Fi to associate and get
+a usable IPv4 address. Loss of an established connection gets the same grace
+period, allowing normal supplicant reconnection before fallback. Internet access
+is not a requirement: a working local Wi-Fi network remains usable offline.
+Fallback broadcasts an OPEN network named FlexClock-XXXXXX. XXXXXX is the last
+six hexadecimal characters of the physical Pi's hardware serial (uppercase),
+read from /proc/device-tree/serial-number, with /proc/cpuinfo Serial as a fallback.
+It never uses machine-id, hostname, random identifiers or MAC addresses. Thus
+reinstalling the OS on the same Pi produces the same SSID. Missing/invalid serial
+numbers fail explicitly rather than silently assigning a different identity.
+
+Connect to that network and open http://192.168.4.1. The normal web login and
+CSRF checks still apply. There is no captive portal, DNS interception, Internet
+sharing, NAT, or new public web API. A dedicated dnsmasq process supplies only
+DHCP on wlan0, addresses 192.168.4.10 through 192.168.4.200. It advertises no
+router or DNS server, and does not serve Ethernet. Select a network or manually
+enter its SSID if the adapter cannot scan while hosting an AP.
+
+Connecting pauses the hotspot while the same radio tries the requested network.
+The browser connection can drop; on failure, reconnect to the SAME hotspot and
+open the same URL. On success, use the station IP shown on the clock's menu.
+Invalid input is rejected before pausing the AP. Authentication or address
+assignment failure restores fallback. Successful association without an IP is
+not reported as completed connectivity. With fallback enabled, previous saved
+credentials are preserved until the requested network supplies a usable address;
+DHCP failure removes the trial profile without saving it. No hotspot profile is written to the
+saved supplicant configuration. Station addressing settings remain intact.
+Disconnect Wi-Fi disables saved networks and keeps fallback active, including
+across reboot, until a successful explicit connection clears the pause marker.
+
+Once fallback is active, an idle retry of saved Wi-Fi happens no more often than
+once per five minutes, with a 30-second connection window. Any associated Wi-Fi
+client suppresses that retry, protecting users configuring the device. A failed
+retry returns to fallback. Transitions and web changes share the existing root
+lock. The monitor repairs partial transitions after a helper failure. AP status
+is published atomically in /run/flexclock-hotspot.json, containing no credentials.
+The menu keeps the logo and mode selection at bottom left. While fallback is
+ready and no Ethernet or station Wi-Fi address is available, the SSID and URL
+replace the IP address at bottom right. Display priority is Ethernet, then
+station Wi-Fi, then hotspot. Active clock
+modes render normally and remain fully controllable on the hotspot. The ordinary
+IP footer resumes when fallback ends. Network transitions do not reset timing
+state.
+
+Installer provisioning (reviewed maintenance window, not a software update):
+  sudo apt-get install dnsmasq-base
+  sudo bash scripts/setup_hotspot.sh
+The script installs root-owned code, two service units and DHCP configuration,
+adds nohook wpa_supplicant ONLY to the managed wlan0 block in dhcpcd.conf, and
+enables flexclock-hotspot.service for NEXT BOOT. It backs up the prior dhcpcd
+configuration and refuses unmanaged wlan0/profile definitions. The interface
+supplicant remains the owner of Wi-Fi, so a dhcpcd release cannot kill it through
+an optional hook. No service is restarted and no live network is switched by
+this narrow setup. The full installer still performs its existing OS setup;
+do not run it merely to deploy this feature on an existing clock.
+
+The monitor is /usr/local/libexec/flexclock/web_network.py monitor. Start it only
+during approved commissioning after the dhcpcd nohook setting has taken effect.
+Its companion flexclock-hotspot-dhcp.service is started on demand, never enabled
+at boot independently. Ethernet settings, credentials, routing and services are
+not rewritten. A wlan0-only DHCP release may stop dhcpcd when it has no other
+managed interfaces; station recovery starts that daemon if needed, without
+restarting Ethernet. Do not deploy on a LAN using 192.168.4.0/24 without reviewing
+route overlap: fallback refuses a conflicting Ethernet subnet before switching,
+preserving existing administrative access. The fixed hotspot subnet must remain
+reachable; change the Ethernet LAN subnet during supervised provisioning if needed.
+
+Removal/recovery for maintainers: disable and stop flexclock-hotspot.service
+while local/Ethernet access is available, stop flexclock-hotspot-dhcp.service,
+remove /etc/flexclock-hotspot-enabled, reload the saved supplicant configuration,
+remove only wlan0's AP address, and rebind dhcpcd on wlan0. Do not restart all
+networking or flush Ethernet. The installer backup is for manual review, not an
+automatic overwrite of subsequently changed network settings. Existing software
+update helper synchronization carries the new helper with compatible releases;
+a rollback to a release predating hotspot support needs supervised removal of
+fallback first. Do not run an older network helper against an active runtime AP.
+
+Verification for this change:
+Automated tests cover hardware serial validation, AP configuration without
+saving it, interface isolation, invalid input, failed credentials/IP assignment,
+disconnect persistence, outage debounce, protected associated clients, idle retry,
+partial transitions, display content and restoration, and existing web auth/CSRF.
+Physical commissioning still must test: boot with/without saved Wi-Fi; a phone
+joining the open AP and receiving DHCP; authenticated configuration at the fixed
+URL; correct/wrong passwords; DHCP failure; power-cycling the upstream AP;
+client-protected and idle recovery; Ethernet access during fallback; all physical
+LED panel sizes/modes; service crash/reboot recovery; and the identical SSID after
+an OS reinstall on the same Pi. Do not treat mocked transitions as radio tests.
+
+Implementation references:
+https://www.raspberrypi.com/documentation/computers/raspberry-pi.html
+https://w1.fi/cgit/hostap/plain/wpa_supplicant/wpa_supplicant.conf
+https://man.netbsd.org/dhcpcd.8
+https://thekelleys.org.uk/dnsmasq/docs/dnsmasq-man.html
+
+Hotspot development verification on this Pi (2026-10-26): 72 controller tests
+and 78 website tests passed. The 11 hotspot-specific tests also passed after the
+final stack guard change. Shell syntax, Python compilation, systemd unit
+validation, dnsmasq configuration validation, and both repository whitespace
+checks passed. Read-only hardware checks confirmed AP support, the hardware
+serial-derived SSID FlexClock-5AB2D7, and the existing usable station connection.
+The current dhcpcd, interface supplicant, nginx and sign-web remained active.
+No new system files were installed, no network service was restarted, no radio
+mode was switched, and no reboot occurred. Live fallback, DHCP client joins,
+physical LED behavior and reinstall identity still require commissioning.
+
+Continuation review (2026-10-26): the earlier counts above describe that earlier
+session only. On resuming, fallback was already installed and running, and both
+the deployed display and website files contained the hotspot changes. A second
+Codex process was still active and service/radio changes occurred independently
+during review; no live network mutations were performed by the continuation.
+Added regression coverage for preserving saved credentials on missing DHCP,
+link-local and leftover hotspot addresses, and committing only after a usable
+address. Controller tests: 74 passed; website tests: 78 passed. Website legacy helper coverage now
+explicitly disables fallback in its fixture rather than depending on host setup.
+Physical commissioning results must be recorded separately from unit tests.
+Shell syntax, Python compilation, systemd unit validation, dnsmasq configuration
+validation and both repository whitespace checks also passed. Ethernet HTTP
+entry returned 200; unauthenticated /network returned a login redirect (302).
+The final credential-preservation correction is in the working tree and has not
+been installed into the root-owned helper during this continuation.
+
+Approved live hotspot commissioning (2026-10-26)
+-----------------------------------------------
+Installed the root-owned hotspot helper, dedicated DHCP unit/configuration, and
+boot-enabled monitor using setup_hotspot.sh. Applied the wlan0-only dhcpcd
+configuration reload. Deployed only the changed network/display/web files into
+the active managed application; unrelated pending update-feature edits were
+not deployed. Restarted sign-web. Left the running Count Up timer untouched;
+when the controller subsequently reported Menu, restarted sign-ui to activate
+the display code. No reboot or OS reinstallation was performed.
+
+Live checks on the physical Pi passed:
+- A runtime station disconnect triggered automatic fallback without changing
+  saved credentials. Radio status reported AP mode and wlan0 had 192.168.4.1/24.
+- The hotspot login page returned 200; protected network settings redirected to
+  login. Ethernet at 192.168.0.126 remained available during fallback.
+- An actual UDP DHCP DISCOVER/OFFER/REQUEST/ACK probe bound to wlan0 obtained
+  192.168.4.49 from 192.168.4.1, with mask 255.255.255.0 and no advertised router
+  or DNS server. This was a local protocol probe, not a phone/radio client join.
+- Connecting to an unavailable network failed and restored the same hotspot;
+  the restored configuration URL served its login page.
+- A deliberately wrong password for the saved PSK network produced the expected
+  password error and restored fallback, without replacing saved credentials.
+- The controller's actual captured LED frame matched the hotspot SSID/URL
+  renderer exactly. The preview was inspected; physical panel appearance still
+  needs a person at the sign. No running timer was reset for this test.
+- Exercising the monitor's idle-retry branch recovered saved Wi-Fi, removed AP
+  status, and stopped DHCP. Normal menu rendering resumed. The periodic retry
+  deadline was advanced only in the test instance; production remains 5 minutes.
+
+Final state: station Wi-Fi 192.168.0.107, Ethernet 192.168.0.126, fallback monitor
+active and enabled at boot, hotspot DHCP inactive until needed, sign-ui and
+sign-web active with zero automatic restarts. Protected settings and supplicant
+configuration hashes match their pre-deployment values. The final helper also
+retains previous saved credentials until a replacement gets a usable address.
+Temporary recovery timers/scripts used during commissioning were removed.
+The private original deployment backup is:
+  /var/backups/flexclock-hotspot-20261026T172901Z
+No backup contents or credentials were published.
+
+Still to verify physically: a separate phone joins the open hotspot, logs in
+and saves credentials; client-associated retry suppression on the real radio;
+boot/reboot and power-loss recovery; fresh installation with no saved networks;
+and identical hardware-derived SSID following an OS reinstall. The existing
+Ethernet subnet-conflict and old-release rollback limitations above still apply.
+Final source validation after commissioning: 74 controller tests and 78 website
+tests passed, including 13 hotspot-specific tests. Installed systemd units and
+DHCP configuration validated, shell syntax passed, and both Git whitespace
+checks were clean.
+
+Hotspot display correction (2026-10-26): phone association and authenticated
+web login were confirmed by the user. The full-screen hotspot override was
+hiding every mode frame, even while the timer ran. Removed that override from
+the shared matrix output. Only the menu substitutes a two-line SSID/URL footer
+for the IP address, retaining the logo and bottom-left mode selection. Operating
+modes keep their existing full display area. The installer already ships both
+changed Python files; no extra system packages or network changes are required.
+76 controller tests passed, including normal and hotspot menu layout coverage
+at multiple sizes and unchanged active-mode frame output while hotspot is ready.
+The display service was restarted to load the correction; no network service
+was restarted. The temporary Wi-Fi recovery timer was canceled to keep the
+user's phone connected during display verification.
+Live controller verification on the hotspot passed for all five modes: timer
+start/pause and advancing values, lap-set to 7, and FinishLynx selection/rendering.
+Each captured mode frame differed from the menu. Returned to the revised menu
+after testing. Hotspot and Ethernet login pages both returned HTTP 200.
+User confirmation of the revised physical display is still pending.
+
+Menu connection priority correction (2026-10-26): retain the normal IP footer
+whenever the preferred connection supplies an Ethernet or station Wi-Fi address,
+even if the configuration hotspot remains active. Only use its SSID/URL footer
+when the preferred address is the hotspot address (or no address is available).
+This changes display selection only; it does not disconnect hotspot clients or
+modify network services. The existing installer ships boot/splash.py.
+Validation: 77 controller tests passed. Applied on the Pi and inspected the
+captured live menu: logo, bottom-left mode, bottom-right Ethernet 192.168.0.126.
+The hotspot stayed available at 192.168.4.1; only the display service restarted.

@@ -1,0 +1,15 @@
+[Unit]
+Description=FlexClock Wi-Fi fallback monitor
+After=dhcpcd.service wpa_supplicant@wlan0.service
+Wants=dhcpcd.service wpa_supplicant@wlan0.service
+ConditionPathExists=/etc/flexclock-hotspot-enabled
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/flexclock/web_network.py monitor
+Restart=always
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
